@@ -16,6 +16,7 @@ fw-test:
     cmake --build build/fw-tests
     ctest --test-dir build/fw-tests --output-on-failure
 
-# Function length, complexity and parameter limits for the firmware C code.
+# Firmware C limits: function length, complexity, parameters (lizard) and 100-char lines (grep).
 fw-lint:
     lizard --warnings_only -C 8 -a 5 -L 100 firmware/src firmware/tests
+    grep -nE '^.{101,}' firmware/src/*.[ch] firmware/tests/*.[ch]; test $? -eq 1
