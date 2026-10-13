@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 780" width="1200" height="780" font-family="-apple-system, system-ui, Helvetica, Arial, sans-serif">
+  <title>Wiring: Pico 2 W between the HP M130a, a 5 V supply and the Debug Probe</title>
+  <rect width="1200" height="780" fill="#ffffff"/>
+
+  <!-- Mac -->
+  <rect x="60" y="60" width="200" height="90" rx="10" fill="#f1f3f5" stroke="#495057" stroke-width="2"/>
+  <text x="160" y="98" text-anchor="middle" font-size="18" font-weight="600" fill="#212529">Mac</text>
+  <text x="160" y="122" text-anchor="middle" font-size="13" fill="#495057">tio (UART log), probe-rs (flash)</text>
+  <path d="M160 150 V300" fill="none" stroke="#868e96" stroke-width="5" stroke-linecap="round"/>
+  <text x="172" y="230" font-size="12" fill="#495057">USB cable</text>
+
+  <!-- Debug Probe -->
+  <rect x="80" y="300" width="220" height="220" rx="10" fill="#fff0f6" stroke="#a61e4d" stroke-width="2"/>
+  <text x="190" y="332" text-anchor="middle" font-size="18" font-weight="600" fill="#212529">Debug Probe</text>
+  <rect x="270" y="345" width="30" height="55" rx="3" fill="#ffffff" stroke="#a61e4d" stroke-width="1.5"/>
+  <text x="262" y="378" text-anchor="end" font-size="13" font-weight="600" fill="#a61e4d">"U" UART</text>
+  <rect x="270" y="460" width="30" height="55" rx="3" fill="#ffffff" stroke="#a61e4d" stroke-width="1.5"/>
+  <text x="262" y="493" text-anchor="end" font-size="13" font-weight="600" fill="#a61e4d">"D" SWD</text>
+
+  <!-- UART wires: probe TX -> Pico RX, probe RX -> Pico TX -->
+  <path d="M300 355 H400 V210 H485" fill="none" stroke="#f2c200" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M300 370 H420 V240 H485" fill="none" stroke="#f76707" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M300 385 H440 V270 H485" fill="none" stroke="#212529" stroke-width="4" stroke-linejoin="round"/>
+
+  <!-- SWD wires to the debug pads -->
+  <path d="M300 500 H340 V680 H670 V600" fill="none" stroke="#f2c200" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M300 487 H355 V660 H630 V600" fill="none" stroke="#212529" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M300 474 H370 V640 H590 V600" fill="none" stroke="#f76707" stroke-width="4" stroke-linejoin="round"/>
+
+  <!-- Pico 2 W -->
+  <rect x="470" y="170" width="320" height="440" rx="8" fill="#ebfbee" stroke="#2b8a3e" stroke-width="2.5"/>
+  <text x="630" y="330" text-anchor="middle" font-size="22" font-weight="700" fill="#2b8a3e">Pico 2 W</text>
+  <text x="630" y="354" text-anchor="middle" font-size="12" fill="#2b8a3e">top view, micro-USB up</text>
+  <text x="630" y="420" text-anchor="middle" font-size="12" fill="#868e96">pins 4-20 and 21-37 unused</text>
+
+  <!-- left pins -->
+  <circle cx="485" cy="210" r="7" fill="#ffffff" stroke="#2b8a3e" stroke-width="2"/>
+  <circle cx="485" cy="240" r="7" fill="#ffffff" stroke="#2b8a3e" stroke-width="2"/>
+  <circle cx="485" cy="270" r="7" fill="#ffffff" stroke="#2b8a3e" stroke-width="2"/>
+  <text x="498" y="214" font-size="13" fill="#212529"><tspan font-weight="700">1</tspan> GP0 · UART0 TX</text>
+  <text x="498" y="244" font-size="13" fill="#212529"><tspan font-weight="700">2</tspan> GP1 · UART0 RX</text>
+  <text x="498" y="274" font-size="13" fill="#212529"><tspan font-weight="700">3</tspan> GND</text>
+
+  <!-- right pins -->
+  <circle cx="775" cy="210" r="7" fill="#ffffff" stroke="#2b8a3e" stroke-width="2"/>
+  <circle cx="775" cy="240" r="7" fill="#ffffff" stroke="#adb5bd" stroke-width="2"/>
+  <circle cx="775" cy="270" r="7" fill="#ffffff" stroke="#2b8a3e" stroke-width="2"/>
+  <text x="762" y="214" text-anchor="end" font-size="13" fill="#212529">VBUS <tspan font-weight="700">40</tspan></text>
+  <text x="762" y="244" text-anchor="end" font-size="13" fill="#adb5bd">VSYS (free) <tspan font-weight="700">39</tspan></text>
+  <text x="762" y="274" text-anchor="end" font-size="13" fill="#212529">GND <tspan font-weight="700">38</tspan></text>
+
+  <!-- debug pads -->
+  <circle cx="590" cy="592" r="7" fill="#ffffff" stroke="#2b8a3e" stroke-width="2"/>
+  <circle cx="630" cy="592" r="7" fill="#ffffff" stroke="#2b8a3e" stroke-width="2"/>
+  <circle cx="670" cy="592" r="7" fill="#ffffff" stroke="#2b8a3e" stroke-width="2"/>
+  <text x="590" y="575" text-anchor="middle" font-size="11" fill="#212529">SWCLK</text>
+  <text x="630" y="575" text-anchor="middle" font-size="11" fill="#212529">GND</text>
+  <text x="670" y="575" text-anchor="middle" font-size="11" fill="#212529">SWDIO</text>
+  <text x="630" y="552" text-anchor="middle" font-size="12" fill="#2b8a3e">debug pads (bottom edge)</text>
+
+  <!-- micro-USB and OTG adapter -->
+  <rect x="605" y="150" width="50" height="24" rx="4" fill="#ced4da" stroke="#495057" stroke-width="1.5"/>
+  <rect x="545" y="90" width="170" height="56" rx="6" fill="#e7f5ff" stroke="#1971c2" stroke-width="2"/>
+  <text x="630" y="113" text-anchor="middle" font-size="13" font-weight="600" fill="#1971c2">OTG adapter</text>
+  <text x="630" y="132" text-anchor="middle" font-size="11" fill="#1971c2">micro-B → USB-A socket</text>
+  <path d="M630 146 V150" stroke="#495057" stroke-width="4"/>
+
+  <!-- printer cable -->
+  <path d="M715 118 H900" fill="none" stroke="#1971c2" stroke-width="6" stroke-linecap="round"/>
+  <text x="808" y="106" text-anchor="middle" font-size="12" fill="#1971c2">USB-A → USB-B printer cable</text>
+  <text x="808" y="140" text-anchor="middle" font-size="11" fill="#495057">VBUS (5 V) reaches the printer</text>
+
+  <!-- printer -->
+  <rect x="900" y="60" width="240" height="120" rx="10" fill="#f8f0fc" stroke="#862e9c" stroke-width="2"/>
+  <text x="1020" y="104" text-anchor="middle" font-size="18" font-weight="600" fill="#212529">HP LaserJet M130a</text>
+  <text x="1020" y="128" text-anchor="middle" font-size="12" fill="#495057">USB-B port at the back</text>
+  <text x="1020" y="148" text-anchor="middle" font-size="12" fill="#495057">plugged into mains, switched on</text>
+
+  <!-- 5 V supply -->
+  <path d="M960 545 H860 V210 H782" fill="none" stroke="#e03131" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M960 575 H840 V270 H782" fill="none" stroke="#212529" stroke-width="4" stroke-linejoin="round"/>
+  <rect x="960" y="510" width="200" height="100" rx="10" fill="#fff5f5" stroke="#e03131" stroke-width="2"/>
+  <text x="1060" y="545" text-anchor="middle" font-size="16" font-weight="600" fill="#212529">5 V supply</text>
+  <text x="1060" y="568" text-anchor="middle" font-size="12" fill="#495057">USB charger + USB breakout</text>
+  <text x="1060" y="587" text-anchor="middle" font-size="12" fill="#495057">(or bench supply), 1 A is plenty</text>
+  <text x="950" y="538" text-anchor="end" font-size="12" fill="#e03131">+5 V (red)</text>
+  <text x="950" y="592" text-anchor="end" font-size="12" fill="#212529">GND (black)</text>
+
+  <!-- legend -->
+  <rect x="40" y="560" width="270" height="140" rx="8" fill="#f8f9fa" stroke="#dee2e6"/>
+  <text x="56" y="584" font-size="13" font-weight="600" fill="#212529">Debug Probe cable colours</text>
+  <line x1="56" y1="604" x2="86" y2="604" stroke="#f76707" stroke-width="4"/>
+  <text x="94" y="608" font-size="12" fill="#212529">orange: TX (U) / SWCLK (D)</text>
+  <line x1="56" y1="628" x2="86" y2="628" stroke="#f2c200" stroke-width="4"/>
+  <text x="94" y="632" font-size="12" fill="#212529">yellow: RX (U) / SWDIO (D)</text>
+  <line x1="56" y1="652" x2="86" y2="652" stroke="#212529" stroke-width="4"/>
+  <text x="94" y="656" font-size="12" fill="#212529">black: GND</text>
+  <text x="56" y="684" font-size="11" fill="#495057">No UART text? Swap orange and yellow.</text>
+
+  <!-- notes -->
+  <text x="420" y="722" font-size="13" fill="#212529"><tspan font-weight="700">TX goes to RX:</tspan> probe orange (TX) → pin 2 (GP1, RX); probe yellow (RX) → pin 1 (GP0, TX).</text>
+  <text x="420" y="744" font-size="13" fill="#212529"><tspan font-weight="700">Never</tspan> plug the Pico's micro-USB into the Mac: it is the host port, fed by the 5 V on pin 40.</text>
+  <text x="420" y="766" font-size="13" fill="#212529">All grounds are shared: probe GND, supply GND and the Pico's GND pins.</text>
+</svg>

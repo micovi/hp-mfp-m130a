@@ -1,7 +1,9 @@
 # hp-mfp-m130a
 
 Making a USB-only HP LaserJet Pro MFP M130a printable (and ideally scannable) over WiFi, with a
-Raspberry Pi Pico 2 W plugged into its USB port. Background and options: [docs/research.md](docs/research.md).
+Raspberry Pi Pico 2 W plugged into its USB port. Background and options:
+[docs/research.md](docs/research.md). Wiring: [docs/wiring.svg](docs/wiring.svg). Firmware plan:
+[docs/superpowers/plans/](docs/superpowers/plans/).
 
 ## Setup
 
