@@ -26,3 +26,20 @@ fw-build:
     cmake -S firmware -B build/fw -G Ninja
     cmake --build build/fw
     arm-none-eabi-size build/fw/m130a_bridge.elf
+
+# Flash through the Debug Probe's SWD port and restart the Pico.
+flash: fw-build
+    probe-rs download --chip RP235x build/fw/m130a_bridge.elf
+    probe-rs reset --chip RP235x
+
+# The Pico's UART0 log, through the Debug Probe. Quit with ctrl-t q.
+logs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    shopt -s nullglob
+    ports=(/dev/cu.usbmodem*)
+    if [ ${#ports[@]} -eq 0 ]; then
+        echo "No /dev/cu.usbmodem* serial port: connect the Debug Probe's USB cable" >&2
+        exit 1
+    fi
+    tio --baudrate 115200 "${ports[0]}"
