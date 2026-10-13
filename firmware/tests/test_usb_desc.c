@@ -85,7 +85,8 @@ static void test_truncated_buffer_is_rejected(void) {
     uint8_t config[512];
     size_t len = load("m130a-config-full-speed.bin", config, sizeof config);
     usb_bulk_pair_t pair = {0};
-    // 113 bytes lands inside the IPP IN endpoint descriptor, which starts at offset 108.
+    // A buffer shorter than wTotalLength (168) is rejected before the walk starts, even though
+    // 113 bytes happens to land inside the IPP IN endpoint descriptor (offset 108).
     CHECK(!usb_find_bulk_pair(config, 113, (usb_interface_class_t){0xFF, 0x09, 0x01}, &pair));
     // wTotalLength (config[2..3]) claiming more bytes than the buffer actually holds.
     uint8_t inflated[512];
@@ -106,20 +107,63 @@ static void test_bad_header_is_rejected(void) {
     CHECK(!usb_find_bulk_pair(config, 8, (usb_interface_class_t){0xFF, 0x09, 0x01}, &pair));
 }
 
-static void test_short_interface_descriptor_is_rejected(void) {
-    // A synthetic configuration: a matching interface with only a bulk OUT, then a malformed
-    // 8-byte "interface" descriptor (too short to really be type 4), then a bulk IN. The IN
-    // endpoint must not be picked up as if it still belonged to the first interface.
-    uint8_t config[] = {
-        9, 2, 40, 0, 1, 1, 0, 0x80, 0,       // configuration header, wTotalLength = 40
-        9, 4, 0, 0, 2, 0xFF, 0x09, 0x01, 0,  // interface 0, class ff/09/01
-        7, 5, 0x01, 0x02, 64, 0, 0,          // bulk OUT 0x01
-        8, 4, 0, 0, 0, 0, 0, 0,              // malformed: type 4 (interface) but only 8 bytes
-        7, 5, 0x82, 0x02, 64, 0, 0,          // bulk IN 0x82
-    };
+static void test_short_header_is_rejected(void) {
+    // A synthetic configuration whose header claims bLength 8 (not 9). Byte 8 (the header's
+    // last byte) doubles as the bLength of a bogus "interface" descriptor that would start one
+    // byte early and happen to match ff/09/01 with a bulk OUT/IN pair right after it, so without
+    // the header's own bLength check this would be wrongly accepted instead of rejected.
+    uint8_t config[] = {8,    2, 31, 0, 1, 1, 0, 0x80, 9,     // header: bLength 8 (should be 9)
+                        4,    0, 0,  2, 0xFF, 0x09, 0x01, 0,  // mis-read as an interface at [8]
+                        7,    5, 0x01, 2, 64, 0, 0,
+                        7,    5, 0x82, 2, 64, 0, 0};
     usb_bulk_pair_t pair = {0};
     CHECK(!usb_find_bulk_pair(config, sizeof config, (usb_interface_class_t){0xFF, 0x09, 0x01},
                               &pair));
+}
+
+static void test_short_interface_descriptor_is_rejected(void) {
+    // A synthetic configuration whose only interface descriptor is one byte short of the
+    // required 9 (bLength 8, not 9). Its 8 present bytes already satisfy the alt-setting and
+    // class/subclass/protocol match on their own, so this must be rejected for the bad bLength,
+    // not accepted because the fields that matter happen to be in bounds.
+    uint8_t config[] = {9, 2, 31, 0, 1, 1, 0, 0x80, 0, 8,   4,  0,  0, 2,
+                        0xFF, 0x09, 0x01, 7, 5, 0x01, 2, 64, 0, 0, 7, 5, 0x82, 2, 64, 0, 0};
+    usb_bulk_pair_t pair = {0};
+    CHECK(!usb_find_bulk_pair(config, sizeof config, (usb_interface_class_t){0xFF, 0x09, 0x01},
+                              &pair));
+}
+
+static void test_short_endpoint_descriptor_is_rejected(void) {
+    // A synthetic configuration whose bulk OUT descriptor is one byte short of the required 7
+    // (bLength 4, not 7). Reading past its claimed end for wMaxPacketSize would wander into the
+    // next descriptor's bytes, so this must be rejected outright instead.
+    uint8_t config[] = {9, 2, 29, 0, 1, 1, 0, 0x80, 0, 9, 4,  0, 0, 2, 0xFF, 0x09,
+                        0x01, 0,    4, 5, 0x01, 2, 7,    5, 0x82, 2, 64, 0,    0};
+    usb_bulk_pair_t pair = {0};
+    CHECK(!usb_find_bulk_pair(config, sizeof config, (usb_interface_class_t){0xFF, 0x09, 0x01},
+                              &pair));
+}
+
+static void test_zero_length_descriptor_does_not_hang(void) {
+    // A synthetic configuration where the second descriptor (neither an interface nor an
+    // endpoint, so only the general bLength-too-short guard can catch it) claims bLength 0.
+    // Without that guard, the walk's offset would never advance past it.
+    uint8_t config[] = {9, 2, 11, 0, 1, 1, 0, 0x80, 0, 0, 0x0B};
+    usb_bulk_pair_t pair = {0};
+    CHECK(!usb_find_bulk_pair(config, sizeof config, (usb_interface_class_t){0xFF, 0x09, 0x01},
+                              &pair));
+}
+
+static void test_first_bulk_endpoints_win(void) {
+    // Four bulk endpoints on one matching interface: the first OUT and first IN must be the
+    // ones reported, not the last.
+    uint8_t config[] = {9, 2, 46, 0, 1, 1, 0, 0x80, 0, 9, 4, 0, 0, 4, 0xFF, 0x09, 0x01, 0,
+                        7, 5, 0x01, 2, 64, 0, 0, 7, 5, 0x81, 2, 64, 0, 0,
+                        7, 5, 0x02, 2, 64, 0, 0, 7, 5, 0x82, 2, 64, 0, 0};
+    usb_bulk_pair_t pair = {0};
+    CHECK(usb_find_bulk_pair(config, sizeof config, (usb_interface_class_t){0xFF, 0x09, 0x01},
+                             &pair));
+    CHECK(pair.ep_out == 0x01 && pair.ep_in == 0x81);
 }
 
 static void test_bulk_type_filter(void) {
@@ -156,7 +200,11 @@ int main(void) {
     test_bounds_check_rejects_overrun_endpoint();
     test_truncated_buffer_is_rejected();
     test_bad_header_is_rejected();
+    test_short_header_is_rejected();
     test_short_interface_descriptor_is_rejected();
+    test_short_endpoint_descriptor_is_rejected();
+    test_zero_length_descriptor_does_not_hang();
+    test_first_bulk_endpoints_win();
     test_bulk_type_filter();
     test_alternate_setting_filter();
     return CHECK_RESULT();

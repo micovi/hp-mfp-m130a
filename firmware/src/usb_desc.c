@@ -22,10 +22,13 @@ enum {
     EP_MAX_PACKET = 4,
 };
 
-// Validates the configuration (or other-speed configuration) header and returns wTotalLength:
-// the number of bytes of `config` that belong to this descriptor set.
+// Validates the configuration (or other-speed configuration) header. On success, writes
+// wTotalLength (the number of bytes of `config` that belong to this descriptor set) to `*out`.
 static bool config_total_length(const uint8_t *config, size_t len, uint16_t *out) {
     if (len < CONFIG_HEADER_LEN) {
+        return false;
+    }
+    if (config[0] < CONFIG_HEADER_LEN) {
         return false;
     }
     if (config[1] != DESC_CONFIGURATION && config[1] != DESC_OTHER_SPEED_CONFIGURATION) {
@@ -49,6 +52,9 @@ static bool has_both(const usb_bulk_pair_t *pair) {
 }
 
 static void note_endpoint(const uint8_t *ep, size_t offset, usb_bulk_pair_t *pair) {
+    if (ep[1] != DESC_ENDPOINT) {
+        return;
+    }
     if ((ep[EP_ATTRIBUTES] & ENDPOINT_TYPE_MASK) != ENDPOINT_TYPE_BULK) {
         return;
     }
@@ -83,19 +89,12 @@ static bool descriptor_too_short(const uint8_t *desc, size_t offset, uint16_t to
     return false;
 }
 
-// Notes a bulk endpoint, but only while walking an interface that matched.
-static void note_endpoint_if_inside(const uint8_t *desc, size_t offset, bool inside,
-                                    usb_bulk_pair_t *pair) {
-    if (inside && desc[1] == DESC_ENDPOINT) {
-        note_endpoint(desc, offset, pair);
-    }
-}
-
 // Starts tracking a new interface. Returns true if the walk should stop here, because the
-// interface just finished (still `inside` from the previous iteration) already had both
-// endpoints; otherwise resets `pair` and updates `inside` for the interface that is starting.
-static bool enter_interface(const uint8_t *itf, bool inside, usb_bulk_pair_t *pair) {
-    if (inside && has_both(pair)) {
+// interface just finished already had both endpoints (it can only have gathered them while
+// `inside` was true, so that is not checked again here); otherwise resets `pair` for the
+// interface that is starting.
+static bool enter_interface(const uint8_t *itf, usb_bulk_pair_t *pair) {
+    if (has_both(pair)) {
         return true;
     }
     *pair = (usb_bulk_pair_t){0};
@@ -117,12 +116,12 @@ bool usb_find_bulk_pair(const uint8_t *config, size_t len, usb_interface_class_t
             return false;
         }
         if (desc[1] == DESC_INTERFACE) {
-            if (enter_interface(desc, inside, &pair)) {
+            if (enter_interface(desc, &pair)) {
                 break;
             }
             inside = matches(desc, wanted);
-        } else {
-            note_endpoint_if_inside(desc, offset, inside, &pair);
+        } else if (inside) {
+            note_endpoint(desc, offset, &pair);
         }
         offset += desc[0];
     }

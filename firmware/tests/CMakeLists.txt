@@ -16,4 +16,5 @@ foreach(module usb_desc)
     target_compile_definitions(test_${module} PRIVATE
         FIXTURE_DIR="${CMAKE_CURRENT_LIST_DIR}/fixtures")
     add_test(NAME ${module} COMMAND test_${module})
+    set_tests_properties(${module} PROPERTIES TIMEOUT 10)
 endforeach()
