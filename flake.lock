@@ -18,7 +18,25 @@
     },
     "root": {
       "inputs": {
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": "nixpkgs",
+        "tinyusb": "tinyusb"
+      }
+    },
+    "tinyusb": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1782833247,
+        "narHash": "sha256-CgXBdWExxbAOxHE5oXDffxK+5qWFVebjV7e+R9Yxbbk=",
+        "owner": "hathach",
+        "repo": "tinyusb",
+        "rev": "dae3f9a366bfcddbf9dcf1b48d7500286a849539",
+        "type": "github"
+      },
+      "original": {
+        "owner": "hathach",
+        "ref": "0.21.0",
+        "repo": "tinyusb",
+        "type": "github"
       }
     }
   },

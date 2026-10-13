@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Probe and firmware checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Every tool comes from the flake's dev shell, as on a developer machine.
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24  # v31.11.1
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build the dev shell
+        run: nix develop --command true
+
+      - name: Probe tests
+        run: nix develop --command just test
+
+      - name: Probe lint and types
+        run: nix develop --command just lint
+
+      - name: Firmware host tests
+        run: nix develop --command just fw-test
+
+      - name: Firmware size and complexity limits
+        run: nix develop --command just fw-lint
+
+      - name: Firmware build
+        run: nix develop --command just fw-build

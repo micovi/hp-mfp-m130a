@@ -4,3 +4,6 @@ __pycache__/
 .ruff_cache/
 # What `just probe` reads from the printer; share it by hand when needed.
 probe-output/
+
+# CMake build trees (just fw-test, just fw-build).
+build/

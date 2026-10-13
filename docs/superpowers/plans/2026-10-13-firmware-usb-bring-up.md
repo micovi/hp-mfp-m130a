@@ -26,6 +26,13 @@ source file below compiles for `pico2_w` with `-Wall -Wextra -Werror` and zero w
 text, 6.2 KB bss); the host tests pass with UBSan under nixpkgs' clang 21. Nothing has run on a Pico
 yet. The captured descriptors are already in `firmware/tests/fixtures/`.
 
+
+> **Revised during review (2026-10-13).** Code review of Tasks 2-5 changed the code below: the
+> `usb_find_bulk_pair` and `http_request_head` signatures (parameter structs), stricter descriptor
+> and HTTP validation, one-packet IN reads, no `tuh_edpt_abort_xfer` (a no-op on the RP2040/RP2350
+> host controller), and `CFG_TUH_ENDPOINT_MAX 16` (8 overflowed TinyUSB's per-endpoint tables).
+> The sources in `firmware/` are authoritative; the snippets here are the starting point.
+
 ---
 
 ## File structure
@@ -1206,7 +1213,8 @@ pico_add_extra_outputs(m130a_bridge)
 #define CFG_TUH_ENUMERATION_BUFSIZE 256
 #define CFG_TUH_HUB 0
 #define CFG_TUH_DEVICE_MAX 1
-#define CFG_TUH_ENDPOINT_MAX 8
+// Not a count: the highest endpoint number + 1. The printer's IPP endpoints are 11 and 12.
+#define CFG_TUH_ENDPOINT_MAX 16
 #define CFG_TUH_API_EDPT_XFER 1
 
 #endif
