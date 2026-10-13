@@ -20,3 +20,9 @@ fw-test:
 fw-lint:
     lizard --warnings_only -C 8 -a 5 -L 100 firmware/src firmware/tests
     grep -nE '^.{101,}' firmware/src/*.[ch] firmware/tests/*.[ch]; test $? -eq 1
+
+# Cross-compile the firmware: build/fw/m130a_bridge.{elf,uf2}.
+fw-build:
+    cmake -S firmware -B build/fw -G Ninja
+    cmake --build build/fw
+    arm-none-eabi-size build/fw/m130a_bridge.elf
