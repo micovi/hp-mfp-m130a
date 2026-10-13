@@ -6,6 +6,7 @@ scan job. Everything the printer answers is saved under probe-output/ for later 
 
 import json
 import sys
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -33,6 +34,7 @@ OUTPUT_DIR = Path("probe-output")
 READ_SIZE = 16 * 1024
 READ_TIMEOUT_MS = 5000
 DRAIN_TIMEOUT_MS = 200
+IDLE_POLL_S = 0.001
 HTTP_OK = 200
 
 INTERFACE_KINDS = {
@@ -141,18 +143,33 @@ class UsbHttpChannel:
             raise UsbStepError(f"IF{self._interface.number}: {what} failed: {error}") from error
 
     def _read(self) -> bytes:
-        try:
-            return bytes(self._device.read(self._in, READ_SIZE, READ_TIMEOUT_MS))
-        except usb.core.USBTimeoutError as error:
-            raise TimeoutError(f"no data from IF{self._interface.number}") from error
+        """Returns the next bytes, or raises TimeoutError after READ_TIMEOUT_MS without any.
+
+        When idle, HP's IPP interfaces answer every read at once with a zero-length packet
+        instead of letting it time out, so quiet is measured in wall-clock time.
+        """
+        deadline = time.monotonic() + READ_TIMEOUT_MS / 1000
+        while time.monotonic() < deadline:
+            try:
+                data = bytes(self._device.read(self._in, READ_SIZE, READ_TIMEOUT_MS))
+            except usb.core.USBTimeoutError:
+                break
+            if data:
+                return data
+            time.sleep(IDLE_POLL_S)
+        raise TimeoutError(f"no data from IF{self._interface.number} for {READ_TIMEOUT_MS} ms")
 
     def _drain(self) -> int:
+        """Discards bytes left over from an earlier exchange, up to the first empty read."""
         discarded = 0
         while True:
             try:
-                discarded += len(self._device.read(self._in, READ_SIZE, DRAIN_TIMEOUT_MS))
+                data = self._device.read(self._in, READ_SIZE, DRAIN_TIMEOUT_MS)
             except usb.core.USBTimeoutError:
                 return discarded
+            if not data:
+                return discarded
+            discarded += len(data)
 
 
 def find_printer(backend: usb.backend.IBackend) -> usb.core.Device | None:

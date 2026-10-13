@@ -21,15 +21,29 @@ real printer.
   There is no standard `07/01/04` IPP-over-USB interface. OpenPrinting ipp-usb accepts HP's
   `ff/09/01` as IPP-over-USB for vendor `0x03f0`.
 - **macOS already uses IPP-over-USB with it (confirmed):** its CUPS queue for the printer has the
-  device URI `ippusb://HP LaserJet MFP M130a (000001)._ipp._tcp.local./?uuid=...`. So the printer
-  answers IPP on its USB IPP interfaces. While that queue exists, macOS holds those interfaces.
+  device URI `ippusb://HP LaserJet MFP M130a (000001)._ipp._tcp.local./?uuid=...`, and macOS
+  bridges it to `ipp://localhost:<port>/ipp/print` (find it with `ippfind`). The probe still
+  claims IF3 and IF1 directly while that queue exists.
+- **IPP over IF3 (confirmed by `just probe`):** IPP 1.0/1.1/2.0, `document-format-supported` =
+  `image/urf, application/PCLm, application/octet-stream`, `urf-supported` =
+  `V1.4, CP99, W8, OB10, PQ3-4-5, IS1, MT1-3-5, RS600` (8-bit gray, 600 dpi), one-sided, A4.
+  That is what macOS's AirPrint driver needs: it sends URF.
+- **eSCL over IF3 (confirmed):** `GET /eSCL/ScannerCapabilities` answers eSCL 2.5: flatbed only
+  (no ADF), RGB24 and Grayscale8, 75-1200 dpi, JPEG and PDF output, up to 2550x3508 (A4 at
+  300 dpi units). So AirScan works through the same proxy as printing.
+- **LEDM over IF1 (confirmed):** 31 `/DevMgmt` and `/EventMgmt` resources (supplies, status,
+  config), none for scanning.
+- **Idle IN endpoints return zero-length packets (confirmed):** with nothing to send, IF3 answers
+  every bulk IN read immediately with a ZLP (about 11k/s) instead of NAKing until a timeout. A
+  reader must therefore find response ends from HTTP framing and measure silence by the clock;
+  "read returned nothing" is not "the device is quiet". The Pico firmware has to do the same.
 - **Print languages:** PCLmS, URF, PWG raster (HP datasheet). No PCL5/6, no PostScript. Over the
   printer-class interface it is a host-rendered raster printer; HPLIP drives it with hpcups'
   open-source Hbpl1/PCLm encoder (no plugin for printing).
 - **Speed:** Hi-Speed device with a Device Qualifier descriptor, so it should fall back to
   full-speed (64-byte bulk packets) behind the Pico's full-speed-only host. Not yet tried.
 - **Scanning:** HPLIP uses the SOAP "HorseThief" protocol on IF5 and needs HP's proprietary
-  plugin. eSCL over the IPP interfaces is unconfirmed. VueScan supports the M130a on macOS.
+  plugin; eSCL over IF3 (above) avoids it.
 - **Job size (estimate):** hpcups renders 600 dpi 8-bit gray, about 35 MB raw per A4 page; RLE
   makes a text page about 0.3-2 MB, an image page 10-35 MB.
 
@@ -57,12 +71,12 @@ real printer.
 
 ## Laptop side and architectures
 
-- **A. IPP-over-USB proxy on the Pico (preferred):** the Pico forwards HTTP between WiFi and
-  IF3/IF4 and advertises `_ipp._tcp` (subtype `_universal`) and `_uscan._tcp` over mDNS (lwIP's
-  responder, `LWIP_MDNS_RESPONDER=1`). macOS sees an AirPrint printer (and AirScan scanner, if eSCL
-  works) with no driver. The proxy must parse HTTP framing and drain each response completely, or
-  a client that disconnects mid-response leaves bytes that corrupt the next one (ipp-usb's
-  lesson). Roughly 1-2k lines of C. ipp-usb's quirks: a similar HP (M28-M31) needs
+- **A. IPP-over-USB proxy on the Pico (chosen; the printer side is confirmed):** the Pico
+  forwards HTTP between WiFi and IF3/IF4 and advertises `_ipp._tcp` (subtype `_universal`) and
+  `_uscan._tcp` over mDNS (lwIP's responder, `LWIP_MDNS_RESPONDER=1`). macOS sees an AirPrint
+  printer and AirScan scanner with no driver. The proxy must parse HTTP framing and drain each
+  response completely, or a client that disconnects mid-response leaves bytes that corrupt the
+  next one (ipp-usb's lesson). Roughly 1-2k lines of C. ipp-usb's quirks: a similar HP (M28-M31) needs
   `Connection: keep-alive`.
 - **B. Port 9100 bridge:** the Pico copies TCP to IF0. The Mac needs a driver that emits PCLmS;
   HP ships no current Mac driver for this model, so the laptop would render PCLm itself. Printing
@@ -90,4 +104,3 @@ real printer.
   https://github.com/WARMW00D/ESP32-S3-PrintServer, https://github.com/MAXXTANG/ESP32S3_PrintServer,
   https://github.com/pldrobot/ESP32S3-USBIP-Server
 - usbip-macos: https://github.com/carlossless/usbip-macos
-- VueScan M130a: https://www.hamrick.com/vuescan/hp_laserjet_pro_m130a.html
