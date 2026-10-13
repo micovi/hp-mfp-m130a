@@ -10,7 +10,7 @@ add_compile_options(-Wall -Wextra -Werror -fsanitize=undefined -fno-sanitize-rec
 add_link_options(-fsanitize=undefined)
 
 enable_testing()
-foreach(module usb_desc)
+foreach(module usb_desc http_request)
     add_executable(test_${module} test_${module}.c ${SRC}/${module}.c)
     target_include_directories(test_${module} PRIVATE ${SRC})
     target_compile_definitions(test_${module} PRIVATE
