@@ -9,3 +9,9 @@ lint:
     ruff check .
     ruff format --check .
     ty check probe tests
+
+# Host unit tests for the firmware's hardware-independent modules.
+fw-test:
+    cmake -S firmware/tests -B build/fw-tests -G Ninja
+    cmake --build build/fw-tests
+    ctest --test-dir build/fw-tests --output-on-failure
