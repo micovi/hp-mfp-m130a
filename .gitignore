@@ -1,0 +1,6 @@
+.direnv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+# What `just probe` reads from the printer; share it by hand when needed.
+probe-output/

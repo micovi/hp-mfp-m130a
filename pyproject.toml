@@ -1,0 +1,26 @@
+# Tool configuration only: the dependencies come from flake.nix.
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["probe"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "C90", "PL", "RUF"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 8
+
+[tool.ruff.lint.pylint]
+max-args = 5
+
+[tool.ruff.lint.per-file-ignores]
+# Tests compare against literal byte offsets and lengths.
+"tests/*" = ["PLR2004"]
+
+[tool.pytest.ini_options]
+pythonpath = ["probe"]
+testpaths = ["tests"]
+
+[tool.ty.environment]
+extra-paths = ["probe"]
