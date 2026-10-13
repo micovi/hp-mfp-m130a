@@ -144,6 +144,18 @@ static void test_short_endpoint_descriptor_is_rejected(void) {
                               &pair));
 }
 
+static void test_non_endpoint_descriptor_is_ignored(void) {
+    uint8_t config[] = {9, 2, 39, 0, 1, 1, 0, 0x80, 0,
+                        9, 4, 0, 0, 2, 0xFF, 0x09, 0x01, 0,
+                        // A class-specific descriptor (e.g. HID) that looks like a bulk IN.
+                        7, 0x21, 0x83, 2, 64, 0, 0,
+                        7, 5, 0x01, 2, 64, 0, 0, 7, 5, 0x82, 2, 64, 0, 0};
+    usb_bulk_pair_t pair = {0};
+    CHECK(usb_find_bulk_pair(config, sizeof config, (usb_interface_class_t){0xFF, 0x09, 0x01},
+                             &pair));
+    CHECK(pair.ep_in == 0x82 && pair.ep_in_offset == 32);
+}
+
 static void test_zero_length_descriptor_does_not_hang(void) {
     // A synthetic configuration where the second descriptor (neither an interface nor an
     // endpoint, so only the general bLength-too-short guard can catch it) claims bLength 0.
@@ -203,6 +215,7 @@ int main(void) {
     test_short_header_is_rejected();
     test_short_interface_descriptor_is_rejected();
     test_short_endpoint_descriptor_is_rejected();
+    test_non_endpoint_descriptor_is_ignored();
     test_zero_length_descriptor_does_not_hang();
     test_first_bulk_endpoints_win();
     test_bulk_type_filter();

@@ -92,7 +92,9 @@ static bool descriptor_too_short(const uint8_t *desc, size_t offset, uint16_t to
 // Starts tracking a new interface. Returns true if the walk should stop here, because the
 // interface just finished already had both endpoints (it can only have gathered them while
 // `inside` was true, so that is not checked again here); otherwise resets `pair` for the
-// interface that is starting.
+// interface that is starting. Once a match is complete this keeps returning true, without
+// resetting `pair`, for every later interface too; that is what keeps the result correct even
+// if the caller did not actually stop the walk on the first true (there is no other `break`).
 static bool enter_interface(const uint8_t *itf, usb_bulk_pair_t *pair) {
     if (has_both(pair)) {
         return true;
