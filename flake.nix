@@ -40,6 +40,8 @@
               # Lint, format and type check (just lint).
               pkgs.ruff
               pkgs.ty
+              # Function size and complexity limits (just fw-lint).
+              pkgs.python3Packages.lizard
               # Runs the recipes in the justfile.
               pkgs.just
               # The firmware (just fw-build, just fw-test).

@@ -15,3 +15,7 @@ fw-test:
     cmake -S firmware/tests -B build/fw-tests -G Ninja
     cmake --build build/fw-tests
     ctest --test-dir build/fw-tests --output-on-failure
+
+# Function length, complexity and parameter limits for the firmware C code.
+fw-lint:
+    lizard --warnings_only -C 8 -a 5 -L 100 firmware/src firmware/tests
