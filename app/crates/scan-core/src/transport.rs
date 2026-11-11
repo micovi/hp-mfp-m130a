@@ -19,12 +19,20 @@ pub trait Transport {
     /// [`TransportError`] when the device failed.
     fn read(&mut self, deadline: Instant) -> Result<Vec<u8>, TransportError>;
 
-    /// Discards bytes left from an earlier exchange, up to the first empty read; returns the count.
+    /// Discards bytes left from an earlier exchange; returns the count.
+    ///
+    /// When nothing is waiting this costs one read. When something was, or after
+    /// [`Transport::abandon`], it reads until the printer has been quiet for a while: the printer
+    /// sends what is left of an abandoned answer in bursts with pauses between them.
     ///
     /// # Errors
     ///
-    /// [`TransportError`] when the device failed while draining.
+    /// [`TransportError`] when the device failed while draining, or kept sending.
     fn drain(&mut self) -> Result<usize, TransportError>;
+
+    /// Records that an exchange ended without reading its whole answer, so the next
+    /// [`Transport::drain`] waits for the printer to finish sending the rest.
+    fn abandon(&mut self);
 }
 
 /// Why a [`Transport`] operation failed.

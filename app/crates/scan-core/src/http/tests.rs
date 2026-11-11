@@ -520,6 +520,8 @@ impl<F: FnMut(Instant) -> Result<Vec<u8>, TransportError>> Transport for Reads<F
     fn drain(&mut self) -> Result<usize, TransportError> {
         Ok(0)
     }
+
+    fn abandon(&mut self) {}
 }
 
 const SILENCE: Duration = Duration::from_millis(40);
@@ -699,4 +701,32 @@ fn passes_transport_errors_through() {
         matches!(result, Err(HttpError::Transport(TransportError::Io(_)))),
         "{result:?}"
     );
+}
+
+#[test]
+fn a_failed_exchange_is_abandoned_and_a_complete_one_is_not() {
+    let ok = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi".to_vec();
+    let cases: [(Vec<u8>, usize); 4] = [
+        (ok.clone(), 0),
+        (b"\xff\xd8\xff\xe0\x00\x10JFIF".to_vec(), 1),
+        (
+            b"HTTP/1.1 200 OK\r\nContent-Length: 9\r\n\r\nhi".to_vec(),
+            1,
+        ),
+        (Vec::new(), 1),
+    ];
+    for (answer, abandoned) in cases {
+        let mut transport = ScriptedTransport::new([Exchange::new("GET /x", answer.clone())]);
+        let result = exchange(&mut transport, &GET, TIMEOUT);
+        assert_eq!(result.is_ok(), abandoned == 0, "{answer:?}: {result:?}");
+        assert_eq!(transport.abandoned(), abandoned, "{answer:?}");
+    }
+}
+
+#[test]
+fn a_failed_write_is_abandoned() {
+    let failing = Exchange::write_fails("GET /x", TransportError::Timeout);
+    let mut transport = ScriptedTransport::new([failing]);
+    assert_eq!(exchange(&mut transport, &GET, TIMEOUT), NO_ANSWER);
+    assert_eq!(transport.abandoned(), 1);
 }

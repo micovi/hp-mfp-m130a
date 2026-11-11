@@ -765,11 +765,18 @@ fn reads_the_capabilities_when_constructed() {
 
 #[test]
 fn construction_fails_when_the_capabilities_cannot_be_read() {
+    let silent = || Exchange::new(CAPABILITIES, Vec::new());
     let cases = [
-        Exchange::new(CAPABILITIES, Vec::new()),
-        Exchange::new(CAPABILITIES, answer("500 Internal Server Error", b"")),
-        Exchange::new(CAPABILITIES, answer("200 OK", b"<oops")),
-        Exchange::write_fails(CAPABILITIES, TransportError::Disconnected),
+        vec![silent(), silent()],
+        vec![Exchange::new(
+            CAPABILITIES,
+            answer("500 Internal Server Error", b""),
+        )],
+        vec![Exchange::new(CAPABILITIES, answer("200 OK", b"<oops"))],
+        vec![Exchange::write_fails(
+            CAPABILITIES,
+            TransportError::Disconnected,
+        )],
     ];
     let expected = [
         |error: &ScanError| timeout_for(error) == Some("the scanner's capabilities"),
@@ -777,8 +784,8 @@ fn construction_fails_when_the_capabilities_cannot_be_read() {
         |error: &ScanError| matches!(error, ScanError::Protocol(d) if d.contains("XML")),
         |error: &ScanError| *error == ScanError::Disconnected,
     ];
-    for (exchange, check) in cases.into_iter().zip(expected) {
-        let result = Scanner::with_transport(ScriptedTransport::new([exchange]), fast());
+    for (exchanges, check) in cases.into_iter().zip(expected) {
+        let result = Scanner::with_transport(ScriptedTransport::new(exchanges), fast());
         let error = result.unwrap_err();
         assert!(check(&error), "{error:?}");
     }
@@ -795,19 +802,20 @@ fn reports_the_scanner_status() {
 
 #[test]
 fn a_status_that_cannot_be_read_is_an_error() {
+    let silent = || Exchange::new(STATUS, Vec::new());
     let cases = [
-        (Exchange::new(STATUS, Vec::new()), "timeout"),
+        (vec![silent(), silent()], "timeout"),
         (
-            Exchange::new(STATUS, answer("404 Not Found", b"")),
+            vec![Exchange::new(STATUS, answer("404 Not Found", b""))],
             "HTTP 404",
         ),
         (
-            Exchange::new(STATUS, answer("200 OK", b"<a/>")),
+            vec![Exchange::new(STATUS, answer("200 OK", b"<a/>"))],
             "ScannerStatus",
         ),
     ];
-    for (exchange, cause) in cases {
-        let mut scanner = scanner_with(fast(), vec![exchange]);
+    for (exchanges, cause) in cases {
+        let mut scanner = scanner_with(fast(), exchanges);
         let error = scanner.status().unwrap_err();
         let fits = match &error {
             ScanError::Timeout { waiting_for } => {
@@ -863,4 +871,102 @@ fn the_page_deadline_scales_with_the_base() {
     };
     assert_eq!(timing.page_deadline(&colour_150), Duration::from_millis(30));
     assert_eq!(timing.page_deadline(&GREY_75), Duration::from_millis(10));
+}
+
+/// The start of a JPEG: what the printer sends while it is still sending a page that an
+/// earlier exchange abandoned.
+fn stale_page() -> Vec<u8> {
+    synthetic_page()[..64].to_vec()
+}
+
+#[test]
+fn capabilities_are_asked_again_after_an_answer_that_is_not_http() {
+    for garbage in [
+        stale_page(),
+        b"<scan:Jobs>left over</scan:Jobs>\r\n\r\n".to_vec(),
+        vec![b'x'; 9000],
+    ] {
+        let script = [
+            Exchange::new(CAPABILITIES, garbage).split(vec![16]),
+            capabilities(),
+        ];
+        let scanner = Scanner::with_transport(ScriptedTransport::new(script), fast()).unwrap();
+        assert_eq!(requests(&scanner), [CAPABILITIES, CAPABILITIES]);
+        assert_eq!(scanner.transport().abandoned(), 1);
+        assert_script_done(&scanner);
+    }
+}
+
+#[test]
+fn the_status_is_asked_again_after_a_silence_or_a_cut_off_answer() {
+    for first in [Vec::new(), b"HTTP/1.1 200 OK\r\nContent-Le".to_vec()] {
+        let mut scanner = scanner_with(fast(), vec![Exchange::new(STATUS, first), status("idle")]);
+        assert_eq!(scanner.status().unwrap().state, ScannerState::Idle);
+        assert_eq!(scanner.transport().abandoned(), 1);
+        assert_script_done(&scanner);
+    }
+}
+
+#[test]
+fn a_document_request_is_asked_again_only_once() {
+    let script = [
+        Exchange::new(CAPABILITIES, stale_page()),
+        Exchange::new(CAPABILITIES, stale_page()),
+    ];
+    let error = Scanner::with_transport(ScriptedTransport::new(script), fast()).unwrap_err();
+    assert!(
+        matches!(&error, ScanError::Protocol(detail) if detail.contains("NUL")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn answers_that_are_http_or_a_lost_printer_are_not_asked_again() {
+    let cases = [
+        Exchange::new(STATUS, b"HTTP/1.1 200 OK\r\n\r\n".to_vec()),
+        Exchange::new(STATUS, chunked_with_bad_size()),
+        Exchange::new(STATUS, b"HTTP/1.1 200".to_vec()).then_fail(TransportError::Disconnected),
+        Exchange::write_fails(STATUS, TransportError::Io("stalled".to_owned())),
+    ];
+    for exchange in cases {
+        let mut scanner = scanner_with(fast(), vec![exchange]);
+        assert!(scanner.status().is_err());
+        assert_script_done(&scanner);
+    }
+}
+
+fn chunked_with_bad_size() -> Vec<u8> {
+    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n".to_vec()
+}
+
+#[test]
+fn the_page_request_is_never_asked_again() {
+    let mut scanner = scanner_with(
+        fast(),
+        vec![
+            status("idle"),
+            created(),
+            Exchange::new(NEXT, stale_page()),
+            deleted(),
+        ],
+    );
+    let error = scan(&mut scanner).unwrap_err();
+    assert!(matches!(error, ScanError::Protocol(_)), "{error:?}");
+    assert_eq!(scanner.transport().abandoned(), 1);
+    assert_script_done(&scanner);
+}
+
+#[test]
+fn the_scan_request_is_never_asked_again() {
+    let mut scanner = scanner_with(
+        fast(),
+        vec![
+            status("idle"),
+            Exchange::new(POST, stale_page()),
+            status("idle"),
+        ],
+    );
+    let error = scan(&mut scanner).unwrap_err();
+    assert!(matches!(error, ScanError::Protocol(_)), "{error:?}");
+    assert_script_done(&scanner);
 }

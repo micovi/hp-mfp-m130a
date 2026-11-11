@@ -2,19 +2,33 @@ use std::collections::VecDeque;
 
 use super::*;
 
-/// A bulk IN endpoint that plays back completions, then answers zero-length packets forever,
+/// What a [`FakeIn`] does next.
+#[derive(Debug)]
+enum Step {
+    /// Completes one transfer like this.
+    Complete(Received),
+    /// Completes transfers empty for this long, as the idle printer does between bursts.
+    Gap(Duration),
+}
+
+/// A bulk IN endpoint that plays back its steps, then answers zero-length packets forever,
 /// as the printer's idle endpoint does.
 #[derive(Default)]
 struct FakeIn {
-    completions: VecDeque<Received>,
+    steps: VecDeque<Step>,
+    gap_end: Option<Instant>,
     timeouts: Vec<Duration>,
 }
 
 impl FakeIn {
     fn new(completions: impl IntoIterator<Item = Received>) -> Self {
+        Self::steps(completions.into_iter().map(Step::Complete))
+    }
+
+    fn steps(steps: impl IntoIterator<Item = Step>) -> Self {
         Self {
-            completions: completions.into_iter().collect(),
-            timeouts: Vec::new(),
+            steps: steps.into_iter().collect(),
+            ..Self::default()
         }
     }
 }
@@ -22,7 +36,27 @@ impl FakeIn {
 impl BulkIn for FakeIn {
     fn receive(&mut self, timeout: Duration) -> Received {
         self.timeouts.push(timeout);
-        self.completions.pop_front().unwrap_or_else(empty)
+        while let Some(Step::Gap(gap)) = self.steps.front() {
+            let end = *self.gap_end.get_or_insert(Instant::now() + *gap);
+            if Instant::now() < end {
+                return empty();
+            }
+            self.steps.pop_front();
+            self.gap_end = None;
+        }
+        match self.steps.pop_front() {
+            Some(Step::Complete(received)) => received,
+            Some(Step::Gap(_)) | None => empty(),
+        }
+    }
+}
+
+/// A bulk IN endpoint that never stops sending.
+struct Endless;
+
+impl BulkIn for Endless {
+    fn receive(&mut self, _timeout: Duration) -> Received {
+        data(b"jpeg")
     }
 }
 
@@ -131,45 +165,124 @@ fn read_describes_other_transfer_failures() {
     }
 }
 
-#[test]
-fn drain_counts_data_up_to_the_first_empty_read() {
-    let mut input = FakeIn::new([data(b"stale"), data(b"bytes"), empty(), data(b"next")]);
-    assert_eq!(drain(&mut input), Ok(10));
-    assert!(
-        input
-            .timeouts
-            .iter()
-            .all(|&timeout| timeout == DRAIN_READ_TIMEOUT)
-    );
-    assert_eq!(input.completions.len(), 1);
+const QUIET: Duration = Duration::from_millis(40);
+const TEST_LIMITS: DrainLimits = DrainLimits {
+    quiet: QUIET,
+    longest: Duration::from_secs(2),
+    most_bytes: 1024 * 1024,
+};
+
+fn gap(milliseconds: u64) -> Step {
+    Step::Gap(Duration::from_millis(milliseconds))
+}
+
+fn burst(bytes: &[u8]) -> Step {
+    Step::Complete(data(bytes))
 }
 
 #[test]
-fn drain_stops_at_a_read_timeout_and_counts_its_partial_data() {
-    let mut input = FakeIn::new([
-        data(b"ab"),
-        failed(b"c", TransferError::Cancelled),
-        data(b"next"),
-    ]);
-    assert_eq!(drain(&mut input), Ok(3));
-}
-
-#[test]
-fn drain_of_an_idle_endpoint_is_one_read() {
-    let mut input = FakeIn::default();
-    assert_eq!(drain(&mut input), Ok(0));
+fn drain_of_a_clean_endpoint_is_one_read() {
+    let mut input = FakeIn::new([data(b"next")]);
+    input.steps.push_front(Step::Complete(empty()));
+    assert_eq!(drain(&mut input, false, &TEST_LIMITS), Ok(0));
+    assert_eq!(input.timeouts, [DRAIN_READ_TIMEOUT]);
+    let mut input = FakeIn::new([failed(b"", TransferError::Cancelled), data(b"next")]);
+    assert_eq!(drain(&mut input, false, &TEST_LIMITS), Ok(0));
     assert_eq!(input.timeouts.len(), 1);
 }
 
 #[test]
+fn drain_waits_out_bursts_separated_by_short_gaps() {
+    let mut input = FakeIn::steps([
+        burst(b"stale"),
+        gap(10),
+        burst(b"jpeg"),
+        burst(b"data"),
+        gap(25),
+        burst(b"more"),
+        gap(150),
+        burst(b"next"),
+    ]);
+    let started = Instant::now();
+    assert_eq!(drain(&mut input, false, &TEST_LIMITS), Ok(17));
+    assert!(started.elapsed() >= QUIET + Duration::from_millis(35));
+    assert!(started.elapsed() < Duration::from_millis(150));
+    assert!(input.timeouts[1..].iter().all(|&timeout| timeout <= QUIET));
+    assert!(matches!(input.steps.back(), Some(Step::Complete(next)) if next.data == b"next"));
+}
+
+#[test]
+fn drain_counts_partial_data_of_cut_short_transfers() {
+    let mut input = FakeIn::new([
+        failed(b"ab", TransferError::Cancelled),
+        failed(b"c", TransferError::Cancelled),
+        empty(),
+    ]);
+    assert_eq!(drain(&mut input, false, &TEST_LIMITS), Ok(3));
+}
+
+#[test]
+fn a_dirty_drain_waits_for_quiet_even_when_the_first_read_is_empty() {
+    let mut input = FakeIn::steps([gap(15), burst(b"late")]);
+    let started = Instant::now();
+    assert_eq!(drain(&mut input, true, &TEST_LIMITS), Ok(4));
+    assert!(started.elapsed() >= QUIET + Duration::from_millis(15));
+
+    let mut input = FakeIn::default();
+    let started = Instant::now();
+    assert_eq!(drain(&mut input, true, &TEST_LIMITS), Ok(0));
+    assert!(started.elapsed() >= QUIET);
+    assert!(input.timeouts.len() > 1);
+}
+
+#[test]
+fn drain_gives_up_on_a_printer_that_keeps_sending() {
+    let limits = DrainLimits {
+        longest: Duration::from_millis(50),
+        most_bytes: usize::MAX,
+        ..TEST_LIMITS
+    };
+    let started = Instant::now();
+    let result = drain(&mut Endless, false, &limits);
+    assert!(started.elapsed() >= limits.longest);
+    assert!(
+        matches!(&result, Err(TransportError::Io(message)) if message.contains("keeps sending")),
+        "{result:?}"
+    );
+
+    let limits = DrainLimits {
+        most_bytes: 10,
+        ..TEST_LIMITS
+    };
+    let started = Instant::now();
+    assert!(drain(&mut Endless, true, &limits).is_err());
+    assert!(started.elapsed() < limits.longest);
+}
+
+#[test]
 fn drain_reports_failures() {
+    let mut input = FakeIn::new([failed(b"", TransferError::Disconnected)]);
+    assert_eq!(
+        drain(&mut input, false, &TEST_LIMITS),
+        Err(TransportError::Disconnected)
+    );
     let mut input = FakeIn::new([data(b"ab"), failed(b"", TransferError::Disconnected)]);
-    assert_eq!(drain(&mut input), Err(TransportError::Disconnected));
+    assert_eq!(
+        drain(&mut input, false, &TEST_LIMITS),
+        Err(TransportError::Disconnected)
+    );
     let mut input = FakeIn::new([failed(b"", TransferError::Stall)]);
     assert!(matches!(
-        drain(&mut input),
+        drain(&mut input, true, &TEST_LIMITS),
         Err(TransportError::Io(message)) if message.starts_with("draining")
     ));
+}
+
+#[test]
+fn production_drain_limits() {
+    assert_eq!(DRAIN_LIMITS.quiet, Duration::from_millis(500));
+    assert_eq!(DRAIN_LIMITS.longest, Duration::from_secs(15));
+    assert_eq!(DRAIN_LIMITS.most_bytes, 256 * 1024 * 1024);
 }
 
 /// A bulk OUT endpoint that records each transfer and fails the ones it is told to.
@@ -437,4 +550,81 @@ fn the_transport_can_move_to_another_thread() {
     fn assert_send<T: Send>() {}
     assert_send::<UsbTransport>();
     assert_send::<Scanner<UsbTransport>>();
+}
+
+/// Runs [`first_started`] over interfaces 3 and 4: `claims` and `starts` say how each fares.
+/// Returns the result and the log of what happened, in order.
+fn open_with(
+    claims: [Result<(), ErrorKind>; 2],
+    starts: [Result<(), ScanError>; 2],
+) -> (Result<u8, ScanError>, Vec<String>) {
+    let mut starts = starts.map(Some);
+    let log = std::cell::RefCell::new(Vec::new());
+    let result = first_started(
+        vec![3_u8, 4],
+        Vec::new(),
+        |number| {
+            log.borrow_mut().push(format!("claim {number}"));
+            claims[usize::from(number - 3)]
+                .map(|()| number)
+                .map_err(failure)
+        },
+        |number| {
+            log.borrow_mut().push(format!("start {number}"));
+            let start = starts[usize::from(number - 3)].take();
+            start.unwrap_or(Ok(())).map(|()| number)
+        },
+    );
+    (result, log.into_inner())
+}
+
+fn timeout() -> ScanError {
+    ScanError::Timeout {
+        waiting_for: "the scanner's capabilities".to_owned(),
+    }
+}
+
+#[test]
+fn opens_the_first_interface_that_answers() {
+    let (result, log) = open_with([Ok(()), Ok(())], [Ok(()), Ok(())]);
+    assert_eq!(result, Ok(3));
+    assert_eq!(log, ["claim 3", "start 3"]);
+}
+
+#[test]
+fn falls_back_to_the_next_interface_when_one_is_stuck_or_taken() {
+    let (result, log) = open_with([Ok(()), Ok(())], [Err(timeout()), Ok(())]);
+    assert_eq!(result, Ok(4));
+    assert_eq!(log, ["claim 3", "start 3", "claim 4", "start 4"]);
+
+    let (result, log) = open_with([Err(ErrorKind::Busy), Ok(())], [Ok(()), Ok(())]);
+    assert_eq!(result, Ok(4));
+    assert_eq!(log, ["claim 3", "claim 4", "start 4"]);
+}
+
+#[test]
+fn the_last_start_error_wins_once_anything_was_claimed() {
+    let (result, _) = open_with(
+        [Ok(()), Ok(())],
+        [Err(timeout()), Err(ScanError::Disconnected)],
+    );
+    assert_eq!(result, Err(ScanError::Disconnected));
+    let (result, _) = open_with([Ok(()), Err(ErrorKind::Busy)], [Err(timeout()), Ok(())]);
+    assert_eq!(result, Err(timeout()));
+}
+
+#[test]
+fn nothing_claimed_is_an_open_error() {
+    let busy = [Err(ErrorKind::Busy), Err(ErrorKind::Busy)];
+    let (result, log) = open_with(busy, [Ok(()), Ok(())]);
+    assert_eq!(result, Err(ScanError::InterfaceBusy));
+    assert_eq!(log, ["claim 3", "claim 4"]);
+
+    let none: Result<u8, ScanError> = first_started(
+        Vec::<u8>::new(),
+        vec![failure(ErrorKind::Disconnected)],
+        Ok,
+        Ok,
+    );
+    assert_eq!(none, Err(ScanError::NotConnected));
 }

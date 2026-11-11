@@ -9,9 +9,9 @@ use crate::escl::{
     Capabilities, ColorMode, ScanSettings, ScannerState, ScannerStatus, job_path,
     parse_capabilities, parse_status, scan_settings_xml,
 };
-use crate::http::{Request, Response, exchange};
+use crate::http::{HttpError, Request, Response, exchange};
 use crate::pdf::Page;
-use crate::transport::Transport;
+use crate::transport::{Transport, TransportError};
 
 const CAPABILITIES_PATH: &str = "/eSCL/ScannerCapabilities";
 const STATUS_PATH: &str = "/eSCL/ScannerStatus";
@@ -317,14 +317,22 @@ fn get_request(path: &str) -> Request<'_> {
 }
 
 /// GETs an eSCL document that must come back 200 OK; returns its body.
+///
+/// Reading these documents changes nothing, so a request whose answer was not HTTP at all, or
+/// never came, is sent once more: the printer may still have been sending the rest of an answer
+/// abandoned earlier, which the failed exchange left for the next drain to wait out.
 fn get<T: Transport>(
     transport: &mut T,
     path: &str,
     silence: Duration,
     waiting_for: &str,
 ) -> Result<Vec<u8>, ScanError> {
-    let response = exchange(transport, &get_request(path), silence)
-        .map_err(|error| ScanError::from_http(error, waiting_for))?;
+    let request = get_request(path);
+    let response = match exchange(transport, &request, silence) {
+        Err(error) if not_an_answer(&error) => exchange(transport, &request, silence),
+        result => result,
+    }
+    .map_err(|error| ScanError::from_http(error, waiting_for))?;
     if response.status != 200 {
         return Err(ScanError::Protocol(format!(
             "HTTP {} for {waiting_for}",
@@ -332,6 +340,24 @@ fn get<T: Transport>(
         )));
     }
     Ok(response.body)
+}
+
+/// Whether `error` means the bytes read were no answer to the request, or none came in time.
+fn not_an_answer(error: &HttpError) -> bool {
+    match error {
+        HttpError::Transport(failure) | HttpError::Incomplete(failure) => {
+            *failure == TransportError::Timeout
+        }
+        HttpError::NulInHead | HttpError::HeadTooLarge | HttpError::BadHead(_) => true,
+        HttpError::SwitchingProtocols
+        | HttpError::BadContentLength
+        | HttpError::ConflictingContentLength
+        | HttpError::TransferEncodingNotChunked
+        | HttpError::NoFraming
+        | HttpError::BadChunkSize
+        | HttpError::ChunkOverrun
+        | HttpError::BodyTooLarge => false,
+    }
 }
 
 fn check(cancel: &AtomicBool) -> Result<(), ScanError> {

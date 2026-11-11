@@ -118,7 +118,8 @@ const LONGEST_READ: Duration = Duration::from_hours(24);
 
 /// Sends `request` and reads one response.
 ///
-/// Bytes left over from an earlier exchange are drained first. Silence is measured by the clock:
+/// Bytes left over from an earlier exchange are drained first, and a failed exchange is marked
+/// abandoned on the transport, so the next drain is thorough. Silence is measured by the clock:
 /// the response's first bytes must arrive within `silence` of sending, and each later read with
 /// data must follow the previous one within `silence`; empty reads never extend it. The whole
 /// response must also arrive within 300 s of sending.
@@ -137,6 +138,9 @@ pub fn exchange<T: Transport>(
 }
 
 /// [`exchange`] with the overall limit as a parameter, so tests need not wait 300 s.
+///
+/// A failed exchange is [abandoned](Transport::abandon), so the next drain waits for whatever
+/// the printer still sends of this answer.
 fn exchange_with_limits<T: Transport>(
     transport: &mut T,
     request: &Request,
@@ -144,6 +148,19 @@ fn exchange_with_limits<T: Transport>(
     total: Duration,
 ) -> Result<Response, HttpError> {
     transport.drain()?;
+    let result = send_and_receive(transport, request, silence, total);
+    if result.is_err() {
+        transport.abandon();
+    }
+    result
+}
+
+fn send_and_receive<T: Transport>(
+    transport: &mut T,
+    request: &Request,
+    silence: Duration,
+    total: Duration,
+) -> Result<Response, HttpError> {
     transport.write(&encode_request(request))?;
     let sent = Instant::now();
     let mut last_data = sent;

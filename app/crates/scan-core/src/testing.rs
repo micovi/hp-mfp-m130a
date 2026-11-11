@@ -89,15 +89,17 @@ impl Exchange {
 /// A [`Transport`] that checks each request against a script and answers from it.
 ///
 /// `read` never waits: it returns [`TransportError::Timeout`] as soon as nothing is queued.
-/// `drain` discards everything queued, unlike the USB transport, which stops at the first empty
-/// read. A request that does not match the script fails with [`TransportError::Io`] and is also
-/// recorded, so [`ScriptedTransport::finish`] reports it even when the caller ignored the error.
+/// `drain` discards everything queued; `abandon` only counts the calls (see
+/// [`ScriptedTransport::abandoned`]). A request that does not match the script fails with
+/// [`TransportError::Io`] and is also recorded, so [`ScriptedTransport::finish`] reports it even
+/// when the caller ignored the error.
 #[derive(Default)]
 pub struct ScriptedTransport {
     script: VecDeque<Exchange>,
     pending: VecDeque<Result<Vec<u8>, TransportError>>,
     writes: Vec<Vec<u8>>,
     mismatches: Vec<String>,
+    abandoned: usize,
     on_write: Option<Box<dyn FnMut(usize) + Send>>,
 }
 
@@ -109,6 +111,7 @@ impl fmt::Debug for ScriptedTransport {
             .field("pending", &self.pending)
             .field("writes", &self.writes.len())
             .field("mismatches", &self.mismatches)
+            .field("abandoned", &self.abandoned)
             .finish_non_exhaustive()
     }
 }
@@ -134,6 +137,12 @@ impl ScriptedTransport {
     #[must_use]
     pub fn writes(&self) -> &[Vec<u8>] {
         &self.writes
+    }
+
+    /// How many exchanges ended without reading their whole answer.
+    #[must_use]
+    pub fn abandoned(&self) -> usize {
+        self.abandoned
     }
 
     /// Checks that every request matched the script and every exchange that is not a
@@ -232,6 +241,10 @@ impl Transport for ScriptedTransport {
         let count = self.pending.iter().flatten().map(Vec::len).sum();
         self.pending.clear();
         Ok(count)
+    }
+
+    fn abandon(&mut self) {
+        self.abandoned += 1;
     }
 }
 
@@ -437,6 +450,15 @@ mod tests {
         transport.write(&request("GET /a")).unwrap();
         assert_eq!(transport.drain(), Ok(6));
         assert_eq!(read(&mut transport), Err(TransportError::Timeout));
+    }
+
+    #[test]
+    fn counts_abandoned_exchanges() {
+        let mut transport = ScriptedTransport::new([]);
+        assert_eq!(transport.abandoned(), 0);
+        transport.abandon();
+        transport.abandon();
+        assert_eq!(transport.abandoned(), 2);
     }
 
     #[test]
