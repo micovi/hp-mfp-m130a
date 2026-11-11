@@ -2,66 +2,115 @@
 //! the fixtures captured from the printer.
 
 use std::collections::VecDeque;
+use std::fmt;
 use std::io;
 use std::path::PathBuf;
 use std::time::Instant;
 
 use crate::transport::{Transport, TransportError};
 
-/// One request the script expects and the bytes the printer answers with.
+/// One request the script expects and how the printer answers it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Exchange {
-    /// What the written request must start with, such as `"GET /eSCL/ScannerStatus"`.
-    pub request_line_prefix: String,
-    /// The raw answer, possibly several responses or trailing bytes.
-    pub response: Vec<u8>,
-    /// Sizes of the successive reads that return the answer; whatever they leave over comes in
-    /// one final read. A 0 is an empty read, which the [`Transport`] contract rules out but a
-    /// misbehaving transport could still return.
-    pub split: Vec<usize>,
+    request: String,
+    response: Vec<u8>,
+    split: Vec<usize>,
+    read_error: Option<TransportError>,
+    write_error: Option<TransportError>,
+    repeat: bool,
 }
 
 impl Exchange {
-    /// An exchange whose answer arrives in a single read.
+    /// Expects a request with this method and path, such as `"GET /eSCL/ScannerStatus"`, and
+    /// answers it with `response` in a single read.
     #[must_use]
-    pub fn new(request_line_prefix: &str, response: Vec<u8>) -> Self {
+    pub fn new(request: &str, response: Vec<u8>) -> Self {
         Self {
-            request_line_prefix: request_line_prefix.to_owned(),
+            request: request.to_owned(),
             response,
             split: Vec::new(),
+            read_error: None,
+            write_error: None,
+            repeat: false,
         }
     }
 
-    /// Delivers the answer in reads of the given sizes.
+    /// Answers every matching request, zero or more times, until a request matches the next
+    /// exchange: for polling whose number of rounds depends on time.
+    #[must_use]
+    pub fn repeat(request: &str, response: Vec<u8>) -> Self {
+        Self {
+            repeat: true,
+            ..Self::new(request, response)
+        }
+    }
+
+    /// Expects this request and fails writing it with `error`.
+    #[must_use]
+    pub fn write_fails(request: &str, error: TransportError) -> Self {
+        Self {
+            write_error: Some(error),
+            ..Self::new(request, Vec::new())
+        }
+    }
+
+    /// Delivers the answer in reads of the given sizes; whatever they leave over comes in one
+    /// final read. A 0 is an empty read, which the [`Transport`] contract rules out but a
+    /// misbehaving transport could still return.
     #[must_use]
     pub fn split(mut self, sizes: Vec<usize>) -> Self {
         self.split = sizes;
         self
     }
 
-    fn pieces(&self) -> Vec<Vec<u8>> {
+    /// Once the answer has been read, the next read fails with `error` (instead of timing out).
+    #[must_use]
+    pub fn then_fail(mut self, error: TransportError) -> Self {
+        self.read_error = Some(error);
+        self
+    }
+
+    fn reads(&self) -> Vec<Result<Vec<u8>, TransportError>> {
         let mut rest = self.response.as_slice();
-        let mut pieces = Vec::new();
+        let mut reads = Vec::new();
         for &size in &self.split {
             let (piece, tail) = rest.split_at(size.min(rest.len()));
-            pieces.push(piece.to_vec());
+            reads.push(Ok(piece.to_vec()));
             rest = tail;
         }
         if !rest.is_empty() {
-            pieces.push(rest.to_vec());
+            reads.push(Ok(rest.to_vec()));
         }
-        pieces
+        reads.extend(self.read_error.clone().map(Err));
+        reads
     }
 }
 
 /// A [`Transport`] that checks each request against a script and answers from it.
 ///
 /// `read` never waits: it returns [`TransportError::Timeout`] as soon as nothing is queued.
-#[derive(Debug, Default)]
+/// `drain` discards everything queued, unlike the USB transport, which stops at the first empty
+/// read. A request that does not match the script fails with [`TransportError::Io`] and is also
+/// recorded, so [`ScriptedTransport::finish`] reports it even when the caller ignored the error.
+#[derive(Default)]
 pub struct ScriptedTransport {
     script: VecDeque<Exchange>,
-    pending: VecDeque<Vec<u8>>,
+    pending: VecDeque<Result<Vec<u8>, TransportError>>,
     writes: Vec<Vec<u8>>,
+    mismatches: Vec<String>,
+    on_write: Option<Box<dyn FnMut(usize) + Send>>,
+}
+
+impl fmt::Debug for ScriptedTransport {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ScriptedTransport")
+            .field("script", &self.script)
+            .field("pending", &self.pending)
+            .field("writes", &self.writes.len())
+            .field("mismatches", &self.mismatches)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ScriptedTransport {
@@ -73,46 +122,114 @@ impl ScriptedTransport {
         }
     }
 
+    /// Calls `hook` on every write with the number of writes so far, this one included; for
+    /// example to set a cancel flag after the Nth request.
+    #[must_use]
+    pub fn on_write(mut self, hook: impl FnMut(usize) + Send + 'static) -> Self {
+        self.on_write = Some(Box::new(hook));
+        self
+    }
+
     /// Every request written so far, including ones that did not match the script.
     #[must_use]
     pub fn writes(&self) -> &[Vec<u8>] {
         &self.writes
     }
+
+    /// Checks that every request matched the script and every exchange that is not a
+    /// [`Exchange::repeat`] was requested.
+    ///
+    /// # Errors
+    ///
+    /// The mismatched requests and the exchanges never requested, in one message.
+    pub fn finish(&self) -> Result<(), String> {
+        let unrequested = self.script.iter().filter(|exchange| !exchange.repeat);
+        let problems: Vec<String> = self
+            .mismatches
+            .iter()
+            .cloned()
+            .chain(unrequested.map(|exchange| {
+                format!(
+                    "scripted transport: {:?} was never requested",
+                    exchange.request
+                )
+            }))
+            .collect();
+        if problems.is_empty() {
+            Ok(())
+        } else {
+            Err(problems.join("; "))
+        }
+    }
+
+    /// Takes the exchange that answers `request`: a repeat stays in the script until the request
+    /// matches the exchange after it.
+    fn answer(&mut self, request: &str) -> Result<Exchange, String> {
+        let next_matches = self
+            .script
+            .get(1)
+            .is_some_and(|next| next.request == request);
+        if next_matches && self.script.front().is_some_and(|front| front.repeat) {
+            self.script.pop_front();
+        }
+        let Some(expected) = self.script.pop_front() else {
+            return Err(format!(
+                "scripted transport: unexpected request {request:?} after the end of the script"
+            ));
+        };
+        let result = if expected.request == request {
+            Ok(expected.clone())
+        } else {
+            Err(format!(
+                "scripted transport: expected {:?}, got {request:?}",
+                expected.request
+            ))
+        };
+        if result.is_err() || expected.repeat {
+            self.script.push_front(expected);
+        }
+        result
+    }
 }
 
-fn request_line(data: &[u8]) -> String {
+/// The method and path of a request: its first line without the HTTP version.
+fn method_and_path(data: &[u8]) -> String {
     let end = data
         .windows(2)
         .position(|pair| pair == b"\r\n")
         .unwrap_or(data.len());
-    String::from_utf8_lossy(&data[..end]).into_owned()
+    let line = String::from_utf8_lossy(&data[..end]);
+    let mut parts = line.splitn(3, ' ');
+    let method = parts.next().unwrap_or_default();
+    let path = parts.next().unwrap_or_default();
+    format!("{method} {path}")
 }
 
 impl Transport for ScriptedTransport {
     fn write(&mut self, data: &[u8]) -> Result<(), TransportError> {
         self.writes.push(data.to_vec());
-        let line = request_line(data);
-        let Some(expected) = self.script.pop_front() else {
-            return Err(TransportError::Io(format!(
-                "scripted transport: unexpected request {line:?} after the end of the script"
-            )));
-        };
-        if !data.starts_with(expected.request_line_prefix.as_bytes()) {
-            return Err(TransportError::Io(format!(
-                "scripted transport: expected a request starting with {:?}, got {line:?}",
-                expected.request_line_prefix
-            )));
+        if let Some(hook) = &mut self.on_write {
+            hook(self.writes.len());
         }
-        self.pending.extend(expected.pieces());
+        let exchange = self.answer(&method_and_path(data)).map_err(|mismatch| {
+            self.mismatches.push(mismatch.clone());
+            TransportError::Io(mismatch)
+        })?;
+        if let Some(error) = exchange.write_error {
+            return Err(error);
+        }
+        self.pending.extend(exchange.reads());
         Ok(())
     }
 
     fn read(&mut self, _deadline: Instant) -> Result<Vec<u8>, TransportError> {
-        self.pending.pop_front().ok_or(TransportError::Timeout)
+        self.pending
+            .pop_front()
+            .unwrap_or(Err(TransportError::Timeout))
     }
 
     fn drain(&mut self) -> Result<usize, TransportError> {
-        let count = self.pending.iter().map(Vec::len).sum();
+        let count = self.pending.iter().flatten().map(Vec::len).sum();
         self.pending.clear();
         Ok(count)
     }
@@ -137,7 +254,18 @@ pub fn fixture(name: &str) -> io::Result<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
+
+    fn read(transport: &mut ScriptedTransport) -> Result<Vec<u8>, TransportError> {
+        transport.read(Instant::now())
+    }
+
+    fn request(method_and_path: &str) -> Vec<u8> {
+        format!("{method_and_path} HTTP/1.1\r\nHost: localhost\r\n\r\n").into_bytes()
+    }
 
     #[test]
     fn answers_in_the_scripted_split_and_records_writes() {
@@ -145,62 +273,187 @@ mod tests {
             Exchange::new("GET /a", b"abcdef".to_vec()).split(vec![2, 0, 3]),
             Exchange::new("GET /b", b"xy".to_vec()),
         ]);
-        transport.write(b"GET /a HTTP/1.1\r\n\r\n").unwrap();
-        let reads: Vec<Vec<u8>> = (0..4)
-            .map(|_| transport.read(Instant::now()).unwrap())
-            .collect();
+        transport.write(&request("GET /a")).unwrap();
+        let reads: Vec<Vec<u8>> = (0..4).map(|_| read(&mut transport).unwrap()).collect();
         assert_eq!(
             reads,
             [b"ab".to_vec(), Vec::new(), b"cde".to_vec(), b"f".to_vec()]
         );
-        assert_eq!(transport.read(Instant::now()), Err(TransportError::Timeout));
-        transport.write(b"GET /b HTTP/1.1\r\n\r\n").unwrap();
-        assert_eq!(transport.read(Instant::now()).unwrap(), b"xy");
-        assert_eq!(transport.writes().len(), 2);
+        assert_eq!(read(&mut transport), Err(TransportError::Timeout));
+        transport.write(&request("GET /b")).unwrap();
+        assert_eq!(read(&mut transport).unwrap(), b"xy");
+        assert_eq!(transport.writes(), [request("GET /a"), request("GET /b")]);
+        assert_eq!(transport.finish(), Ok(()));
     }
 
     #[test]
     fn split_sizes_past_the_end_give_empty_reads() {
-        let exchange = Exchange::new("GET /", b"abc".to_vec()).split(vec![5, 1]);
-        assert_eq!(exchange.pieces(), [b"abc".to_vec(), Vec::new()]);
+        let exchange = Exchange::new("GET /a", b"abc".to_vec()).split(vec![5, 1]);
+        let mut transport = ScriptedTransport::new([exchange]);
+        transport.write(&request("GET /a")).unwrap();
+        assert_eq!(read(&mut transport), Ok(b"abc".to_vec()));
+        assert_eq!(read(&mut transport), Ok(Vec::new()));
+        assert_eq!(read(&mut transport), Err(TransportError::Timeout));
     }
 
     #[test]
-    fn rejects_a_request_the_script_does_not_expect() {
-        let mut transport = ScriptedTransport::new([Exchange::new("GET /a", b"x".to_vec())]);
-        let error = transport.write(b"POST /a HTTP/1.1\r\n\r\n").unwrap_err();
-        assert_eq!(
-            error,
-            TransportError::Io(
-                "scripted transport: expected a request starting with \"GET /a\", \
-                 got \"POST /a HTTP/1.1\""
-                    .to_owned()
-            )
-        );
-        let error = transport.write(b"GET /a HTTP/1.1\r\n\r\n").unwrap_err();
+    fn matches_method_and_path_exactly() {
+        let status = Exchange::new("GET /eSCL/ScannerStatus", b"ok".to_vec());
+        let mut transport = ScriptedTransport::new([status]);
+        let error = transport
+            .write(&request("GET /eSCL/ScannerStatusX"))
+            .unwrap_err();
+        let expected = "scripted transport: expected \"GET /eSCL/ScannerStatus\", \
+                        got \"GET /eSCL/ScannerStatusX\"";
+        assert_eq!(error, TransportError::Io(expected.to_owned()));
         assert!(
-            matches!(error, TransportError::Io(message) if message.contains("end of the script"))
+            transport
+                .write(&request("POST /eSCL/ScannerStatus"))
+                .is_err()
         );
-        assert_eq!(transport.writes().len(), 2);
+        transport
+            .write(&request("GET /eSCL/ScannerStatus"))
+            .unwrap();
+        assert_eq!(read(&mut transport), Ok(b"ok".to_vec()));
+        let report = transport.finish().unwrap_err();
+        assert!(
+            report.contains("ScannerStatusX") && report.contains("POST"),
+            "{report}"
+        );
     }
 
     #[test]
-    fn drain_discards_and_counts_queued_bytes() {
-        let mut transport =
-            ScriptedTransport::new([Exchange::new("GET /", b"abcdef".to_vec()).split(vec![2])]);
+    fn finish_reports_requests_after_the_end_of_the_script() {
+        let mut transport = ScriptedTransport::new([]);
+        let error = transport.write(&request("DELETE /a")).unwrap_err();
+        assert!(
+            matches!(&error, TransportError::Io(message) if message.contains("end of the script"))
+        );
+        let report = transport.finish().unwrap_err();
+        assert!(
+            report.contains("\"DELETE /a\" after the end of the script"),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn finish_reports_exchanges_never_requested() {
+        let mut transport = ScriptedTransport::new([
+            Exchange::new("GET /a", Vec::new()),
+            Exchange::new("DELETE /b", Vec::new()),
+        ]);
+        transport.write(&request("GET /a")).unwrap();
+        let report = transport.finish().unwrap_err();
+        assert!(
+            report.contains("\"DELETE /b\" was never requested"),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn a_read_fails_once_the_answer_is_exhausted() {
+        let exchange = Exchange::new("GET /a", b"ab".to_vec())
+            .split(vec![1])
+            .then_fail(TransportError::Disconnected);
+        let mut transport = ScriptedTransport::new([exchange]);
+        transport.write(&request("GET /a")).unwrap();
+        assert_eq!(read(&mut transport), Ok(b"a".to_vec()));
+        assert_eq!(read(&mut transport), Ok(b"b".to_vec()));
+        assert_eq!(read(&mut transport), Err(TransportError::Disconnected));
+        assert_eq!(read(&mut transport), Err(TransportError::Timeout));
+    }
+
+    #[test]
+    fn a_write_can_fail() {
+        let mut transport = ScriptedTransport::new([
+            Exchange::write_fails("DELETE /a", TransportError::Disconnected),
+            Exchange::new("GET /b", b"b".to_vec()),
+        ]);
+        let result = transport.write(&request("DELETE /a"));
+        assert_eq!(result, Err(TransportError::Disconnected));
+        assert_eq!(read(&mut transport), Err(TransportError::Timeout));
+        transport.write(&request("GET /b")).unwrap();
+        assert_eq!(read(&mut transport), Ok(b"b".to_vec()));
+        assert_eq!(transport.writes().len(), 2);
+        assert_eq!(transport.finish(), Ok(()));
+    }
+
+    #[test]
+    fn a_repeated_exchange_answers_until_the_next_one_matches() {
+        let mut transport = ScriptedTransport::new([
+            Exchange::repeat("GET /next", b"busy".to_vec()),
+            Exchange::new("DELETE /job", b"gone".to_vec()),
+            Exchange::repeat("GET /status", b"idle".to_vec()),
+        ]);
+        for _ in 0..3 {
+            transport.write(&request("GET /next")).unwrap();
+            assert_eq!(read(&mut transport), Ok(b"busy".to_vec()));
+        }
+        transport.write(&request("DELETE /job")).unwrap();
+        assert_eq!(read(&mut transport), Ok(b"gone".to_vec()));
+        assert!(transport.write(&request("GET /next")).is_err());
+        assert_eq!(
+            transport
+                .finish()
+                .map_err(|report| report.contains("GET /next")),
+            Err(true)
+        );
+    }
+
+    #[test]
+    fn a_repeated_exchange_may_match_no_request() {
+        let mut transport = ScriptedTransport::new([
+            Exchange::repeat("GET /status", b"busy".to_vec()),
+            Exchange::new("POST /jobs", b"made".to_vec()),
+            Exchange::repeat("GET /next", b"busy".to_vec()),
+        ]);
+        transport.write(&request("POST /jobs")).unwrap();
+        assert_eq!(read(&mut transport), Ok(b"made".to_vec()));
+        assert_eq!(transport.finish(), Ok(()));
+    }
+
+    #[test]
+    fn calls_the_write_hook_with_the_write_count() {
+        let seen = Arc::new(AtomicUsize::new(0));
+        let hook_seen = Arc::clone(&seen);
+        let mut transport = ScriptedTransport::new([
+            Exchange::new("GET /a", Vec::new()),
+            Exchange::new("GET /b", Vec::new()),
+        ])
+        .on_write(move |count| hook_seen.store(count, Ordering::SeqCst));
+        transport.write(&request("GET /a")).unwrap();
+        assert_eq!(seen.load(Ordering::SeqCst), 1);
+        assert!(transport.write(&request("GET /x")).is_err());
+        assert_eq!(seen.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn drain_discards_and_counts_everything_queued() {
+        let exchange = Exchange::new("GET /a", b"abcdef".to_vec())
+            .split(vec![2])
+            .then_fail(TransportError::Disconnected);
+        let mut transport = ScriptedTransport::new([exchange]);
         assert_eq!(transport.drain(), Ok(0));
-        transport.write(b"GET / HTTP/1.1\r\n\r\n").unwrap();
+        transport.write(&request("GET /a")).unwrap();
         assert_eq!(transport.drain(), Ok(6));
-        assert_eq!(transport.read(Instant::now()), Err(TransportError::Timeout));
+        assert_eq!(read(&mut transport), Err(TransportError::Timeout));
+    }
+
+    #[test]
+    fn debug_output_shows_the_remaining_script() {
+        let transport =
+            ScriptedTransport::new([Exchange::new("GET /a", Vec::new())]).on_write(|_| {});
+        let debug = format!("{transport:?}");
+        assert!(
+            debug.starts_with("ScriptedTransport {") && debug.contains("GET /a"),
+            "{debug}"
+        );
     }
 
     #[test]
     fn loads_fixtures_and_names_missing_ones() {
-        assert!(
-            fixture("m130a-nextdocument-404.http")
-                .unwrap()
-                .starts_with(b"HTTP/1.1 404")
-        );
+        let fixture_404 = fixture("m130a-nextdocument-404.http").unwrap();
+        assert!(fixture_404.starts_with(b"HTTP/1.1 404"));
         let error = fixture("no-such-fixture").unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
         assert!(error.to_string().contains("tests/fixtures/no-such-fixture"));

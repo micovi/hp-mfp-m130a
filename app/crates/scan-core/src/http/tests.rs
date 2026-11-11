@@ -10,6 +10,8 @@ const GET: Request = Request {
     body: b"",
 };
 const TIMEOUT: Duration = Duration::from_secs(10);
+const NO_ANSWER: Result<Response, HttpError> = Err(HttpError::Transport(TransportError::Timeout));
+const INCOMPLETE: Result<Response, HttpError> = Err(HttpError::Incomplete(TransportError::Timeout));
 /// The limits the plan sets, spelled out so the tests pin them rather than follow the constants.
 const EIGHT_KIB: usize = 8192;
 const MIB_128: usize = 134_217_728;
@@ -298,6 +300,18 @@ fn rejects_malformed_status_lines() {
 }
 
 #[test]
+fn a_head_ends_only_at_crlf_crlf() {
+    // httparse alone would end this head at "a\n\r\n" and read "Z:" as the two-byte body.
+    let lone_lf = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nX: a\n\r\nZ: b\r\n\r\nhi";
+    let not_crlf = Err(HttpError::BadHead("head not ended by CRLF CRLF".to_owned()));
+    assert_eq!(respond(lone_lf), not_crlf);
+    assert_eq!(
+        respond(b"HTTP/1.1 200 OK\r\nContent-Length: 2\n\nhi"),
+        not_crlf
+    );
+}
+
+#[test]
 fn rejects_a_nul_in_the_head_but_not_in_the_body() {
     assert_eq!(
         respond(b"HTTP/1.1 200 OK\0\r\nContent-Length: 0\r\n\r\n"),
@@ -334,7 +348,7 @@ fn limits_the_head_to_8_kib() {
     for step in [1, 1000, EIGHT_KIB + 1] {
         assert_eq!(respond_in_steps(&over, step), Err(HttpError::HeadTooLarge));
     }
-    let fields = "X-Field: 1\r\n".repeat(HEADERS_MAX + 1);
+    let fields = "X-Field: 1\r\n".repeat(65);
     let many = format!("HTTP/1.1 200 OK\r\n{fields}Content-Length: 0\r\n\r\n");
     assert!(matches!(
         respond(many.as_bytes()),
@@ -394,7 +408,8 @@ fn rejects_a_response_without_framing() {
 
 #[test]
 fn rejects_bad_chunk_sizes() {
-    let long = format!("{}2", "0".repeat(LINE_MAX - 1));
+    // 64 bytes before the CR is one too many.
+    let long = format!("{}2", "0".repeat(63));
     for size_line in [
         "zz", ";ext", "+2", "-1", " 2", "0x2", "2 x", "2\r", "\n2", &long,
     ] {
@@ -407,7 +422,7 @@ fn rejects_bad_chunk_sizes() {
     }
     let bare_lf = chunked("12\nhi\r\n0\r\n\r\n");
     assert_eq!(respond(&bare_lf), Err(HttpError::BadChunkSize));
-    let longest = format!("{}2", "0".repeat(LINE_MAX - 2));
+    let longest = format!("{}2", "0".repeat(62));
     assert_eq!(
         body_of(&chunked(&format!("{longest}\r\nhi\r\n0\r\n\r\n"))),
         b"hi"
@@ -439,16 +454,13 @@ fn rejects_bytes_after_chunk_data_other_than_crlf() {
 #[test]
 fn a_chunk_needs_both_bytes_of_its_crlf() {
     let stream = chunked("2\r\nhi\r");
-    assert_eq!(
-        respond(&stream),
-        Err(HttpError::Transport(TransportError::Timeout))
-    );
+    assert_eq!(respond(&stream), INCOMPLETE);
 }
 
 #[test]
 fn limits_the_body_to_128_mib() {
     let at_limit = format!("HTTP/1.1 200 OK\r\nContent-Length: {MIB_128}\r\n\r\n");
-    let incomplete = Err(HttpError::Transport(TransportError::Timeout));
+    let incomplete = INCOMPLETE;
     assert_eq!(respond(at_limit.as_bytes()), incomplete);
     let over = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", MIB_128 + 1);
     assert_eq!(respond(over.as_bytes()), Err(HttpError::BodyTooLarge));
@@ -464,25 +476,14 @@ fn limits_the_body_to_128_mib() {
 }
 
 #[test]
-fn times_out_mid_body() {
+fn tells_no_answer_from_an_answer_that_stopped() {
+    assert_eq!(respond(b""), NO_ANSWER);
     let partial = b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nhello";
-    assert_eq!(
-        respond(partial),
-        Err(HttpError::Transport(TransportError::Timeout))
-    );
-    assert_eq!(
-        respond(&chunked("2\r\nhi\r\n")),
-        Err(HttpError::Transport(TransportError::Timeout))
-    );
-    assert_eq!(
-        respond(b""),
-        Err(HttpError::Transport(TransportError::Timeout))
-    );
+    assert_eq!(respond(partial), INCOMPLETE);
+    assert_eq!(respond(&chunked("2\r\nhi\r\n")), INCOMPLETE);
+    assert_eq!(respond(b"HTTP/1.1 100 Continue\r\n\r\n"), INCOMPLETE);
     let unfinished_trailer = chunked("0\r\nExpires: never\r\n");
-    assert_eq!(
-        respond(&unfinished_trailer),
-        Err(HttpError::Transport(TransportError::Timeout))
-    );
+    assert_eq!(respond(&unfinished_trailer), INCOMPLETE);
 }
 
 #[test]
@@ -498,10 +499,11 @@ fn empty_reads_are_not_data() {
     );
 }
 
-/// Answers every read with an empty one, as a transport breaking its contract would.
-struct Silent;
+/// A transport whose reads come from a closure. A read long past its deadline fails, so an
+/// exchange that ignores its limits ends instead of spinning forever.
+struct Reads<F>(F);
 
-impl Transport for Silent {
+impl<F: FnMut(Instant) -> Result<Vec<u8>, TransportError>> Transport for Reads<F> {
     fn write(&mut self, _data: &[u8]) -> Result<(), TransportError> {
         Ok(())
     }
@@ -512,7 +514,7 @@ impl Transport for Silent {
                 "still reading long after the deadline".to_owned(),
             ));
         }
-        Ok(Vec::new())
+        (self.0)(deadline)
     }
 
     fn drain(&mut self) -> Result<usize, TransportError> {
@@ -520,13 +522,90 @@ impl Transport for Silent {
     }
 }
 
+const SILENCE: Duration = Duration::from_millis(40);
+
+/// Answers the first read with `first`, and every later one by calling `then`.
+fn first_then(
+    first: &[u8],
+    mut then: impl FnMut() -> Result<Vec<u8>, TransportError>,
+) -> impl FnMut(Instant) -> Result<Vec<u8>, TransportError> {
+    let mut first = Some(first.to_vec());
+    move |_| first.take().map_or_else(&mut then, Ok)
+}
+
 #[test]
-fn empty_reads_never_extend_the_deadline() {
-    let timeout = Duration::from_millis(20);
+fn silence_before_the_first_byte_is_no_answer() {
     let started = Instant::now();
-    let result = exchange(&mut Silent, &GET, timeout);
-    assert_eq!(result, Err(HttpError::Transport(TransportError::Timeout)));
-    assert!(started.elapsed() >= timeout);
+    let latest = started + SILENCE + Duration::from_millis(20);
+    let mut transport = Reads(|deadline: Instant| {
+        assert!(deadline <= latest, "read deadline past the silence limit");
+        Ok(Vec::new())
+    });
+    assert_eq!(exchange(&mut transport, &GET, SILENCE), NO_ANSWER);
+    assert!(started.elapsed() >= SILENCE);
+}
+
+#[test]
+fn silence_mid_body_is_incomplete() {
+    let head = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhel";
+    let started = Instant::now();
+    let mut transport = Reads(first_then(head, || Ok(Vec::new())));
+    assert_eq!(exchange(&mut transport, &GET, SILENCE), INCOMPLETE);
+    assert!(started.elapsed() >= SILENCE);
+}
+
+#[test]
+fn each_read_with_data_restarts_the_silence_limit() {
+    let mut pieces = [
+        "HTTP/1.1 200 OK\r\n",
+        "Content-Length: 4\r\n",
+        "\r\n",
+        "a",
+        "b",
+        "cd",
+    ]
+    .map(str::as_bytes)
+    .into_iter();
+    let mut transport = Reads(|_| {
+        std::thread::sleep(SILENCE / 2);
+        Ok(pieces.next().unwrap_or_default().to_vec())
+    });
+    let started = Instant::now();
+    let response = exchange(&mut transport, &GET, SILENCE).unwrap();
+    assert_eq!(response.body, b"abcd");
+    assert!(started.elapsed() > SILENCE * 2);
+}
+
+#[test]
+fn a_trickling_answer_stops_at_the_overall_limit() {
+    let head = b"HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\n\r\n";
+    let mut transport = Reads(first_then(head, || {
+        std::thread::sleep(Duration::from_millis(1));
+        Ok(b"a".to_vec())
+    }));
+    let total = SILENCE * 3;
+    let started = Instant::now();
+    let result = exchange_with_limits(&mut transport, &GET, SILENCE, total);
+    assert_eq!(result, INCOMPLETE);
+    assert!(started.elapsed() >= total);
+    assert!(started.elapsed() < total * 5);
+}
+
+#[test]
+fn passes_a_disconnect_through() {
+    let mut gone = Reads(|_| Err(TransportError::Disconnected));
+    let result = exchange(&mut gone, &GET, TIMEOUT);
+    assert_eq!(
+        result,
+        Err(HttpError::Transport(TransportError::Disconnected))
+    );
+    let head = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n";
+    let mut gone_midway = Reads(first_then(head, || Err(TransportError::Disconnected)));
+    let result = exchange(&mut gone_midway, &GET, TIMEOUT);
+    assert_eq!(
+        result,
+        Err(HttpError::Incomplete(TransportError::Disconnected))
+    );
 }
 
 #[test]

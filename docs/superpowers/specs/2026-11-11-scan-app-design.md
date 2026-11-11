@@ -66,8 +66,9 @@ GET  {job}/NextDocument       503 (empty body) while the page is being scanned, 
   answering 503 after its single flatbed page (sane-airscan issue #38 trace), and sane-airscan
   likewise stops after the first page and deletes the job.
 - Each exchange measures silence by the clock, not by read results: the idle printer answers bulk
-  reads with zero-length packets continuously. A response must arrive within 10 s of the request;
-  zero-length packets never extend that.
+  reads with zero-length packets continuously. A response must start within 10 s of the request
+  and never go silent for 10 s; zero-length packets never reset that clock, data does. An
+  absolute 300 s cap bounds a response that trickles.
 - Before each request the transport drains leftover bytes up to the first empty read.
 - Cancel sends `DELETE {job}` and stops polling.
 

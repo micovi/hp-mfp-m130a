@@ -2,7 +2,9 @@
 //!
 //! IPP-over-USB carries plain HTTP/1.1 on a pair of bulk endpoints with no message boundaries,
 //! so a response ends only where its `Content-Length` or chunked encoding says it does. The
-//! framing rules follow the firmware's `http_framer.c`.
+//! framing rules follow the firmware's `http_framer.c`, except where httparse is more lenient
+//! in the head: it skips empty lines before the status line and accepts a lone LF between header
+//! fields; over 64 header fields is a [`HttpError::BadHead`].
 
 use std::time::{Duration, Instant};
 
@@ -49,6 +51,9 @@ pub enum HttpError {
     /// The transport failed, or nothing arrived in time.
     #[error(transparent)]
     Transport(#[from] TransportError),
+    /// Part of the response arrived, then the transport failed or went silent.
+    #[error("the printer stopped partway through its answer: {0}")]
+    Incomplete(TransportError),
     /// The response head contains a NUL byte.
     #[error("the printer sent a malformed HTTP response: NUL byte in the head")]
     NulInHead,
@@ -104,28 +109,53 @@ pub fn encode_request(request: &Request) -> Vec<u8> {
     encoded
 }
 
-/// Sends `request` and reads one response, which must be complete within `timeout` of sending.
+/// The longest a response may take from the request, however steadily its bytes arrive.
+const RESPONSE_MAX_DURATION: Duration = Duration::from_secs(300);
+
+/// Sends `request` and reads one response.
 ///
-/// Bytes left over from an earlier exchange are drained first. An empty read never extends the
-/// deadline.
+/// Bytes left over from an earlier exchange are drained first. Silence is measured by the clock:
+/// the response's first bytes must arrive within `silence` of sending, and each later read with
+/// data must follow the previous one within `silence`; empty reads never extend it. The whole
+/// response must also arrive within 300 s of sending.
 ///
 /// # Errors
 ///
-/// [`HttpError::Transport`] when the transport fails or the response is not complete by the
-/// deadline; any other [`HttpError`] when the response breaks HTTP/1.1 framing.
+/// [`HttpError::Transport`] when the transport fails or nothing arrives in time;
+/// [`HttpError::Incomplete`] when part of the response arrived before that; any other
+/// [`HttpError`] when the response breaks HTTP/1.1 framing.
 pub fn exchange<T: Transport>(
     transport: &mut T,
     request: &Request,
-    timeout: Duration,
+    silence: Duration,
+) -> Result<Response, HttpError> {
+    exchange_with_limits(transport, request, silence, RESPONSE_MAX_DURATION)
+}
+
+/// [`exchange`] with the overall limit as a parameter, so tests need not wait 300 s.
+fn exchange_with_limits<T: Transport>(
+    transport: &mut T,
+    request: &Request,
+    silence: Duration,
+    total: Duration,
 ) -> Result<Response, HttpError> {
     transport.drain()?;
     transport.write(&encode_request(request))?;
-    let deadline = Instant::now() + timeout;
+    let sent = Instant::now();
+    let mut quiet_until = sent + silence;
+    let mut received = false;
     let mut framer = Framer::default();
     loop {
-        let data = transport.read(deadline)?;
-        if data.is_empty() && Instant::now() >= deadline {
-            return Err(TransportError::Timeout.into());
+        let deadline = quiet_until.min(sent + total);
+        if Instant::now() >= deadline {
+            return Err(stopped(received, TransportError::Timeout));
+        }
+        let data = transport
+            .read(deadline)
+            .map_err(|error| stopped(received, error))?;
+        if !data.is_empty() {
+            received = true;
+            quiet_until = Instant::now() + silence;
         }
         if let Some(response) = framer.feed(&data)? {
             return Ok(response);
@@ -133,20 +163,36 @@ pub fn exchange<T: Transport>(
     }
 }
 
+/// A transport failure, as an incomplete response once some of it has arrived.
+fn stopped(received: bool, error: TransportError) -> HttpError {
+    if received {
+        HttpError::Incomplete(error)
+    } else {
+        HttpError::Transport(error)
+    }
+}
+
 const HEAD_MAX: usize = 8 * 1024;
 const HEADERS_MAX: usize = 64;
-/// Chunk-size lines of this many bytes or more, counting the CR, are rejected; trailer lines
-/// past it are only stored up to it.
+/// Chunk-size lines of this many bytes or more, not counting the CR, are rejected; longer
+/// trailer lines are only stored up to it.
 const LINE_MAX: usize = 64;
 const BODY_MAX: usize = 128 * 1024 * 1024;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 enum State {
+    #[default]
     Head,
-    Body { remaining: usize },
+    Body {
+        remaining: usize,
+    },
     ChunkSize,
-    ChunkData { remaining: usize },
-    ChunkEnd { seen_cr: bool },
+    ChunkData {
+        remaining: usize,
+    },
+    ChunkEnd {
+        seen_cr: bool,
+    },
     Trailer,
     Done,
 }
@@ -201,7 +247,7 @@ impl Line {
 }
 
 /// Response framing as a state machine fed with whatever bytes each read returns.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct Framer {
     state: State,
     head: Vec<u8>,
@@ -209,19 +255,6 @@ struct Framer {
     headers: Vec<(String, String)>,
     body: Vec<u8>,
     line: Line,
-}
-
-impl Default for Framer {
-    fn default() -> Self {
-        Self {
-            state: State::Head,
-            head: Vec::new(),
-            status: 0,
-            headers: Vec::new(),
-            body: Vec::new(),
-            line: Line::default(),
-        }
-    }
 }
 
 impl Framer {
@@ -242,14 +275,14 @@ impl Framer {
         }))
     }
 
-    /// Feeds `data` to the current state; returns how many bytes it used.
+    /// Feeds `data`, never empty, to the current state; returns how many bytes it used.
     fn step(&mut self, data: &[u8]) -> Result<usize, HttpError> {
         match self.state {
             State::Head => self.feed_head(data),
             State::Body { remaining } => Ok(self.feed_body(data, remaining)),
             State::ChunkSize => self.feed_chunk_size(data),
             State::ChunkData { remaining } => Ok(self.feed_chunk_data(data, remaining)),
-            State::ChunkEnd { seen_cr } => self.feed_chunk_end(data[0], seen_cr),
+            State::ChunkEnd { seen_cr } => self.feed_chunk_end(data, seen_cr),
             State::Trailer => Ok(self.feed_trailer(data)),
             State::Done => Ok(0),
         }
@@ -321,10 +354,10 @@ impl Framer {
     }
 
     /// Only the CRLF closing a chunk's data may follow it; any other byte fails at once.
-    fn feed_chunk_end(&mut self, byte: u8, seen_cr: bool) -> Result<usize, HttpError> {
-        self.state = match (seen_cr, byte) {
-            (false, b'\r') => State::ChunkEnd { seen_cr: true },
-            (true, b'\n') => State::ChunkSize,
+    fn feed_chunk_end(&mut self, data: &[u8], seen_cr: bool) -> Result<usize, HttpError> {
+        self.state = match (seen_cr, data.first()) {
+            (false, Some(b'\r')) => State::ChunkEnd { seen_cr: true },
+            (true, Some(b'\n')) => State::ChunkSize,
             _ => return Err(HttpError::ChunkOverrun),
         };
         Ok(1)
@@ -355,6 +388,11 @@ fn parse_head(buffer: &[u8]) -> Result<Option<(usize, Head)>, HttpError> {
         Err(_) if head_has_nul(buffer) => return Err(HttpError::NulInHead),
         Err(error) => return Err(HttpError::BadHead(error.to_string())),
     };
+    // httparse also ends a head at a lone LF followed by a line end; the body would then start
+    // inside the header fields.
+    if !buffer[..len].ends_with(b"\r\n\r\n") {
+        return Err(HttpError::BadHead("head not ended by CRLF CRLF".to_owned()));
+    }
     let headers = response
         .headers
         .iter()
@@ -444,7 +482,7 @@ fn chunk_size(line: &Line) -> Result<usize, HttpError> {
         .take_while(|byte| byte.is_ascii_hexdigit())
         .count();
     let rest = trim_start_blanks(&line.bytes[digits..]);
-    let well_formed = digits > 0 && (rest.is_empty() || rest[0] == b';');
+    let well_formed = digits > 0 && rest.first().is_none_or(|&byte| byte == b';');
     if line.overflow || !well_formed {
         return Err(HttpError::BadChunkSize);
     }
