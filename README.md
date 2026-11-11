@@ -51,6 +51,7 @@ printer's IPP-over-USB interface directly; the Rust code is in `app/`.
 
 ```
 just app-build  # prints where the bundle landed: app/target/release/bundle/macos/M130a Scan.app
+just app-install  # also installs it in /Applications and the CLI in ~/.local/bin
 ```
 
 Using it: choose Colour or Grey and a resolution (150, 300 or 600 dpi; 150 by default), lay a page
