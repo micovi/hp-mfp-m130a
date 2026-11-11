@@ -26,13 +26,13 @@ fn status_takes_no_options() {
 }
 
 #[test]
-fn scan_defaults_to_colour_at_300_dpi() {
+fn scan_defaults_to_colour_at_150_dpi() {
     let args = scan_args(&["scan", "--out", "a.pdf"]);
     assert_eq!(args.out, PathBuf::from("a.pdf"));
     assert!(!args.force);
     let expected = ScanSettings {
         color: ColorMode::Colour,
-        dpi: 300,
+        dpi: 150,
     };
     assert_eq!(args.settings(), expected);
 }

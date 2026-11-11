@@ -55,7 +55,7 @@ GET  {job}/NextDocument       503 (empty body) while the page is being scanned, 
 
 - The job path is taken from `Location`, relative (as observed) or absolute.
 - ScanSettings: Version 2.0, Intent Document, Platen, `RGB24` (colour) or `Grayscale8` (grey),
-  150/300/600 dpi (default 300), `pwg:DocumentFormat` image/jpeg, region A4 = 2480×3508 in
+  150/300/600 dpi (default 150), `pwg:DocumentFormat` image/jpeg, region A4 = 2480×3508 in
   1/300 in at offset 0,0, clamped to the reported maximum. The captured request
   (`m130a-scanjobs-request.http`, 75 dpi grey) is the golden reference.
 - Waiting for Idle: poll ScannerStatus every second for up to 30 s before giving up as "busy".

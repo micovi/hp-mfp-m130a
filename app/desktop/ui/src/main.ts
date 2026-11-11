@@ -229,7 +229,7 @@ function selectedColor(): boolean {
 
 function selectedDpi(): Dpi {
   const value = Number(dom.dpi.value);
-  return value === 150 || value === 600 ? value : 300;
+  return value === 300 || value === 600 ? value : 150;
 }
 
 async function scan() {

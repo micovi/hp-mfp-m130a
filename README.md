@@ -53,9 +53,9 @@ printer's IPP-over-USB interface directly; the Rust code is in `app/`.
 just app-build  # prints where the bundle landed: app/target/release/bundle/macos/M130a Scan.app
 ```
 
-Using it: choose Colour or Grey and a resolution (150, 300 or 600 dpi), lay a page face down on
-the glass and press Scan page. Each page joins the list; reorder pages by dragging them or with
-⌘↑/⌘↓, remove the selected one with Delete, and save them as one PDF with ⌘S. Esc cancels a
+Using it: choose Colour or Grey and a resolution (150, 300 or 600 dpi; 150 by default), lay a page
+face down on the glass and press Scan page. Each page joins the list; reorder pages by dragging them
+or with ⌘↑/⌘↓, remove the selected one with Delete, and save them as one PDF with ⌘S. Esc cancels a
 scan in progress.
 
 The CLI scans a page, asks whether another follows, and writes the PDF when you answer no:
@@ -66,7 +66,7 @@ m130a-scan scan --out file.pdf [--grey] [--dpi 150|300|600] [--force]
 ```
 
 `status` prints the scanner's model, state, resolutions and colour modes. `scan` defaults to colour
-at 300 dpi and will not replace an existing file without `--force`. Run it with
+at 150 dpi and will not replace an existing file without `--force`. Run it with
 `cargo run --manifest-path app/Cargo.toml -p scan-cli -- status` (arguments after `--`), or build
 it once with `cargo build --manifest-path app/Cargo.toml -p scan-cli --release` and use
 `app/target/release/m130a-scan`.

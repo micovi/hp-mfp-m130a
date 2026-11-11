@@ -35,7 +35,7 @@ pub struct ScanArgs {
     #[arg(long)]
     pub grey: bool,
     /// Resolution in dots per inch.
-    #[arg(long, default_value = "300", value_parser = dpi_parser())]
+    #[arg(long, default_value = "150", value_parser = dpi_parser())]
     pub dpi: u16,
     /// Replace FILE.pdf if it exists.
     #[arg(long)]
