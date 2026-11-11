@@ -1,0 +1,15 @@
+{
+  "name": "m130a-scan-ui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build src/main.ts --outdir dist --target browser --minify --define SCAN_UI_MOCK=false && cp index.html src/styles.css dist/",
+    "build:mock": "bun build src/main.ts --outdir dist --target browser --minify --define SCAN_UI_MOCK=true && cp index.html src/styles.css dist/",
+    "test": "vitest run",
+    "lint": "biome check && tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "vitest": "5.1.0"
+  }
+}
