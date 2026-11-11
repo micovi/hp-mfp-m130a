@@ -76,7 +76,9 @@ GET  {job}/NextDocument       503 (empty body) while the page is being scanned, 
   reads with zero-length packets continuously. A response must start within 10 s of the request
   and never go silent for 10 s; zero-length packets never reset that clock, data does. An
   absolute 300 s cap bounds a response that trickles.
-- Before each request the transport drains leftover bytes up to the first empty read.
+- Before each request the transport drains leftover bytes: one read when the pipe is clean;
+  after an exchange that ended early, or when stale bytes appear, it reads until the printer has
+  been quiet for 500 ms (leftover page data arrives in bursts), capped at 15 s / 256 MiB.
 - Cancel sends `DELETE {job}` and stops polling.
 
 ## Pages and PDF

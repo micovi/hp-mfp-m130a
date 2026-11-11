@@ -52,3 +52,28 @@ jobs:
 
       - name: Scan app format, clippy and limits
         run: nix develop --command just app_packages='-p scan-core -p scan-cli' app-lint
+
+  macos-app:
+    name: Scan app on macOS
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24  # v31.11.1
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build the dev shell
+        run: nix develop --command true
+
+      - name: Scan app tests
+        run: nix develop --command just app-test
+
+      - name: Scan app format, clippy and limits
+        run: nix develop --command just app-lint
+
+      - name: Desktop app bundle
+        run: nix develop --command just app-build
