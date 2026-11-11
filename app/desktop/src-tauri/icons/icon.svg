@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Placeholder app icon: a page with a scan line across it. -->
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="#1f5fbf"/>
+  <path d="M312 200h300l140 140v484a40 40 0 0 1-40 40H312a40 40 0 0 1-40-40V240a40 40 0 0 1 40-40z" fill="#ffffff"/>
+  <path d="M612 200v100a40 40 0 0 0 40 40h100z" fill="#c9d8f0"/>
+  <rect x="340" y="420" width="280" height="28" rx="14" fill="#c9d8f0"/>
+  <rect x="340" y="490" width="340" height="28" rx="14" fill="#c9d8f0"/>
+  <rect x="340" y="560" width="300" height="28" rx="14" fill="#c9d8f0"/>
+  <rect x="340" y="700" width="220" height="28" rx="14" fill="#c9d8f0"/>
+  <rect x="200" y="620" width="624" height="36" rx="18" fill="#35d07f"/>
+</svg>

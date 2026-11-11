@@ -48,17 +48,26 @@ logs:
 # WebKitGTK: just app_packages='-p scan-core -p scan-cli' app-test
 app_packages := "--workspace"
 
-# Scan app unit tests; no printer needed.
+# Scan app unit tests (Rust and UI); no printer needed.
 app-test:
     cargo test --manifest-path app/Cargo.toml {{app_packages}}
+    cd app/desktop/ui && bun install --frozen-lockfile && bun run test
 
-# Scan app limits: rustfmt, clippy, function size and complexity (lizard), 100-char lines (grep).
+# Scan app limits: rustfmt, clippy, Biome and tsc, function size and complexity (lizard),
+# 100-char lines (grep).
 app-lint:
     cargo fmt --manifest-path app/Cargo.toml --all --check
     cargo clippy --manifest-path app/Cargo.toml {{app_packages}} --all-targets -- -D warnings
-    lizard --warnings_only -C 8 -a 5 -L 100 app/crates
+    cd app/desktop/ui && bun run lint
+    lizard --warnings_only -C 8 -a 5 -L 100 app/crates app/desktop/src-tauri/src app/desktop/ui/src
     grep -rnE --include='*.rs' --exclude-dir=target '^.{101,}' app; test $? -eq 1
+    grep -rnE --include='*.ts' --include='*.css' '^.{101,}' app/desktop/ui/src; test $? -eq 1
 
 # Scan app tests against the printer plugged in by USB, with a sheet on the glass.
 app-hw-test:
     cargo test --manifest-path app/Cargo.toml -p scan-core -- --ignored --test-threads=1
+
+# Build the macOS app bundle (the UI first) and print where it landed.
+app-build:
+    cd app/desktop/src-tauri && cargo tauri build --bundles app
+    @echo "app/target/release/bundle/macos/M130a Scan.app"
