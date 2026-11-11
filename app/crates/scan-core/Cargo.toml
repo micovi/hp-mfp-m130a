@@ -12,7 +12,12 @@ testing = []
 
 [dependencies]
 httparse = "=1.10.1"
+pdf-writer = "=0.15.0"
+quick-xml = "=0.42.0"
 thiserror = "=2.0.21"
+
+[dev-dependencies]
+lopdf = { version = "=0.47.0", default-features = false }
 
 [lints]
 workspace = true
