@@ -60,8 +60,11 @@ GET  {job}/NextDocument       503 (empty body) while the page is being scanned, 
   (`m130a-scanjobs-request.http`, 75 dpi grey) is the golden reference.
 - Waiting for Idle: poll ScannerStatus every second for up to 30 s before giving up as "busy".
 - The 503 polling for one page is bounded by a deadline that grows with the work: 60 s at 150 dpi
-  grey up to 240 s at 600 dpi colour. After the page, keep polling (503 → retry) until 404, for at
-  most 30 s.
+  grey up to 240 s at 600 dpi colour.
+- After the page, the client does not wait for 404: it sends `DELETE {job}` and ignores the
+  answer. This printer answered a few more 503s and then 404, but the closely related M28w keeps
+  answering 503 after its single flatbed page (sane-airscan issue #38 trace), and sane-airscan
+  likewise stops after the first page and deletes the job.
 - Each exchange measures silence by the clock, not by read results: the idle printer answers bulk
   reads with zero-length packets continuously. A response must arrive within 10 s of the request;
   zero-length packets never extend that.
