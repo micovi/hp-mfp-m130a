@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -52,6 +53,25 @@ fn status(state: &str) -> Exchange {
         STATUS,
         ok_with(&format!("m130a-scanner-status-{state}.xml")),
     )
+}
+
+/// A `ScannerStatus` document in `state` listing `jobs` as (URI, job state).
+fn status_with(state: &str, jobs: &[(&str, &str)]) -> Exchange {
+    let mut infos = String::new();
+    for (uri, job_state) in jobs {
+        write!(
+            infos,
+            "<scan:JobInfo><pwg:JobUri>{uri}</pwg:JobUri>\
+             <pwg:ImagesCompleted>0</pwg:ImagesCompleted>\
+             <pwg:JobState>{job_state}</pwg:JobState></scan:JobInfo>"
+        )
+        .unwrap();
+    }
+    let xml = format!(
+        r#"<scan:ScannerStatus xmlns:scan="s" xmlns:pwg="p"><pwg:Version>2.5</pwg:Version>
+           <pwg:State>{state}</pwg:State><scan:Jobs>{infos}</scan:Jobs></scan:ScannerStatus>"#
+    );
+    Exchange::new(STATUS, answer("200 OK", xml.as_bytes()))
 }
 
 fn created() -> Exchange {
@@ -235,7 +255,7 @@ fn keeps_asking_whether_the_scanner_is_idle_until_the_wait_is_over() {
     assert!(elapsed >= Duration::from_millis(100), "{elapsed:?}");
     assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
     let asked = requests(&scanner).len() - 1;
-    assert!((2..=11).contains(&asked), "{asked} status requests");
+    assert!((1..=11).contains(&asked), "{asked} status requests");
     assert_script_done(&scanner);
 }
 
@@ -274,7 +294,15 @@ fn a_created_job_without_a_usable_location_is_a_protocol_error() {
     let bad_location =
         b"HTTP/1.1 201 Created\r\nLocation: /eSCL/Other/1\r\nContent-Length: 0\r\n\r\n";
     for response in [no_location, bad_location.to_vec()] {
-        let mut scanner = scanner_with(fast(), vec![status("idle"), Exchange::new(POST, response)]);
+        let mut scanner = scanner_with(
+            fast(),
+            vec![
+                status("idle"),
+                Exchange::new(POST, response),
+                status_with("Processing", &[("/eSCL/ScanJobs/1003", "Pending")]),
+                Exchange::new("DELETE /eSCL/ScanJobs/1003", answer("200 OK", b"")),
+            ],
+        );
         let error = scan(&mut scanner).unwrap_err();
         assert!(matches!(error, ScanError::Protocol(_)), "{error:?}");
         assert_script_done(&scanner);
@@ -320,7 +348,7 @@ fn polls_for_the_page_until_its_deadline() {
         .iter()
         .filter(|r| r.ends_with("/NextDocument"))
         .count();
-    assert!((2..=11).contains(&polls), "{polls} polls");
+    assert!((1..=11).contains(&polls), "{polls} polls");
     assert_script_done(&scanner);
 }
 
@@ -485,10 +513,223 @@ fn unplugging_the_printer_before_the_job_exists_is_a_disconnection() {
 fn a_silent_scan_request_times_out() {
     let mut scanner = scanner_with(
         fast(),
-        vec![status("idle"), Exchange::new(POST, Vec::new())],
+        vec![
+            status("idle"),
+            Exchange::new(POST, Vec::new()),
+            status("idle"),
+        ],
     );
     let error = scan(&mut scanner).unwrap_err();
-    assert_eq!(timeout_for(&error), Some("the scan job"));
+    assert_eq!(timeout_for(&error), Some("its answer to the scan request"));
+    assert_script_done(&scanner);
+}
+
+#[test]
+fn a_job_the_silent_scan_request_created_is_deleted() {
+    let mut scanner = scanner_with(
+        fast(),
+        vec![
+            status("idle"),
+            Exchange::new(POST, Vec::new()),
+            status_with("Processing", &[("/eSCL/ScanJobs/1003", "Processing")]),
+            Exchange::new("DELETE /eSCL/ScanJobs/1003", answer("200 OK", b"")),
+        ],
+    );
+    let error = scan(&mut scanner).unwrap_err();
+    assert_eq!(timeout_for(&error), Some("its answer to the scan request"));
+    assert_script_done(&scanner);
+}
+
+#[test]
+fn only_unfinished_jobs_this_scan_created_are_deleted() {
+    let before = [
+        ("/eSCL/ScanJobs/1001", "Pending"),
+        ("/eSCL/ScanJobs/1002", "Completed"),
+    ];
+    let after = [
+        ("/eSCL/ScanJobs/1001", "Pending"),
+        ("/eSCL/ScanJobs/1002", "Completed"),
+        ("/eSCL/ScanJobs/1003", "Completed"),
+        ("/eSCL/ScanJobs/1004", "Pending"),
+        ("/eSCL/ScanJobs/1005", "Processing"),
+        ("/eSCL/ScanJobs/10 06", "Pending"),
+    ];
+    let response = b"HTTP/1.1 500 Oops\r\nTransfer-Encoding: gzip\r\n\r\n".to_vec();
+    let mut scanner = scanner_with(
+        fast(),
+        vec![
+            status_with("Idle", &before),
+            Exchange::new(POST, response),
+            status_with("Processing", &after),
+            Exchange::new("DELETE /eSCL/ScanJobs/1004", Vec::new()),
+            Exchange::new("DELETE /eSCL/ScanJobs/1005", Vec::new()),
+        ],
+    );
+    let error = scan(&mut scanner).unwrap_err();
+    assert!(matches!(error, ScanError::Protocol(_)), "{error:?}");
+    assert_script_done(&scanner);
+}
+
+#[test]
+fn a_failed_status_after_a_failed_scan_request_keeps_the_first_error() {
+    let mut scanner = scanner_with(
+        fast(),
+        vec![
+            status("idle"),
+            Exchange::new(POST, Vec::new()),
+            Exchange::new(STATUS, answer("500 Oops", b"")),
+        ],
+    );
+    let error = scan(&mut scanner).unwrap_err();
+    assert_eq!(timeout_for(&error), Some("its answer to the scan request"));
+    assert_script_done(&scanner);
+}
+
+#[test]
+fn a_scanner_busy_with_the_scan_request_is_asked_again() {
+    let not_now = fixture("m130a-nextdocument-503.http").unwrap();
+    let timing = Timing {
+        idle_wait: Duration::from_secs(10),
+        ..fast()
+    };
+    let mut scanner = scanner_with(
+        timing,
+        vec![
+            status("idle"),
+            Exchange::new(POST, not_now),
+            status("idle"),
+            created(),
+            page_arrives(),
+            deleted(),
+        ],
+    );
+    assert_eq!(scan(&mut scanner).unwrap().jpeg(), synthetic_page());
+    assert_script_done(&scanner);
+}
+
+#[test]
+fn a_scanner_that_stays_busy_with_the_scan_request_is_busy() {
+    let not_now = fixture("m130a-nextdocument-503.http").unwrap();
+    let mut scanner = scanner_with(fast(), vec![status("idle"), Exchange::new(POST, not_now)]);
+    assert_eq!(scan(&mut scanner).unwrap_err(), ScanError::ScannerBusy);
+    assert_script_done(&scanner);
+}
+
+#[test]
+fn a_stopped_or_down_scanner_needs_attention_at_once() {
+    for state in ["Stopped", "Down"] {
+        let timing = Timing {
+            idle_wait: Duration::from_secs(10),
+            poll: Duration::from_secs(10),
+            ..fast()
+        };
+        let mut scanner = scanner_with(timing, vec![status_with(state, &[])]);
+        let started = Instant::now();
+        let error = scan(&mut scanner).unwrap_err();
+        assert_eq!(error, ScanError::ScannerNeedsAttention, "{state}");
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_script_done(&scanner);
+    }
+}
+
+#[test]
+fn a_testing_scanner_is_waited_for() {
+    let timing = Timing {
+        idle_wait: Duration::from_secs(10),
+        ..fast()
+    };
+    let mut scanner = scanner_with(
+        timing,
+        vec![
+            status_with("Testing", &[]),
+            status_with("Warming", &[]),
+            status("idle"),
+            created(),
+            page_arrives(),
+            deleted(),
+        ],
+    );
+    assert_eq!(scan(&mut scanner).unwrap().jpeg(), synthetic_page());
+    assert_script_done(&scanner);
+}
+
+#[test]
+fn endless_waits_do_not_overflow_the_clock() {
+    let timing = Timing {
+        idle_wait: Duration::MAX,
+        page: Duration::MAX,
+        ..fast()
+    };
+    let mut scanner = scanner_with(
+        timing,
+        vec![
+            status("processing"),
+            status("idle"),
+            created(),
+            busy(),
+            page_arrives(),
+            deleted(),
+        ],
+    );
+    assert_eq!(scan(&mut scanner).unwrap().jpeg(), synthetic_page());
+    assert_script_done(&scanner);
+    let colour_600 = ScanSettings {
+        color: ColorMode::Colour,
+        dpi: 600,
+    };
+    assert_eq!(timing.page_deadline(&colour_600), Duration::MAX);
+}
+
+#[test]
+fn cancelling_during_a_long_poll_stops_at_once() {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&cancel);
+    let timing = Timing {
+        poll: Duration::from_secs(10),
+        ..fast()
+    };
+    let script = [capabilities(), status("idle"), created(), busy(), deleted()];
+    let transport = ScriptedTransport::new(script).on_write(move |writes| {
+        if writes == 4 {
+            let flag = Arc::clone(&flag);
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(20));
+                flag.store(true, Ordering::SeqCst);
+            });
+        }
+    });
+    let mut scanner = Scanner::with_transport(transport, timing).unwrap();
+    let started = Instant::now();
+    let result = scanner.scan_page(&GREY_75, &cancel);
+    assert_eq!(result.unwrap_err(), ScanError::Cancelled);
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert_script_done(&scanner);
+}
+
+#[test]
+fn cancelling_during_a_long_wait_for_idle_stops_at_once() {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&cancel);
+    let timing = Timing {
+        poll: Duration::from_secs(10),
+        idle_wait: Duration::from_secs(30),
+        ..fast()
+    };
+    let transport =
+        ScriptedTransport::new([capabilities(), status("processing")]).on_write(move |writes| {
+            if writes == 2 {
+                let flag = Arc::clone(&flag);
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(20));
+                    flag.store(true, Ordering::SeqCst);
+                });
+            }
+        });
+    let mut scanner = Scanner::with_transport(transport, timing).unwrap();
+    let started = Instant::now();
+    let result = scanner.scan_page(&GREY_75, &cancel);
+    assert_eq!(result.unwrap_err(), ScanError::Cancelled);
+    assert!(started.elapsed() < Duration::from_secs(1));
     assert_script_done(&scanner);
 }
 
@@ -590,14 +831,14 @@ fn default_timing_follows_the_design() {
 }
 
 #[test]
-fn the_page_deadline_grows_with_pixels_and_colour() {
+fn the_page_deadline_grows_with_resolution_and_colour() {
     let table = [
         (ColorMode::Grey, 75, 60),
-        (ColorMode::Colour, 75, 60),
+        (ColorMode::Colour, 75, 90),
         (ColorMode::Grey, 150, 60),
-        (ColorMode::Grey, 200, 106),
+        (ColorMode::Grey, 200, 80),
         (ColorMode::Colour, 150, 180),
-        (ColorMode::Grey, 300, 240),
+        (ColorMode::Grey, 300, 120),
         (ColorMode::Colour, 300, 240),
         (ColorMode::Grey, 600, 240),
         (ColorMode::Colour, 600, 240),

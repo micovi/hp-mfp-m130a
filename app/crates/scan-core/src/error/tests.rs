@@ -27,6 +27,10 @@ fn every_error_is_one_sentence_saying_what_happened_and_what_to_do() {
             "the scanner is busy; try again in a moment",
         ),
         (
+            ScanError::ScannerNeedsAttention,
+            "the scanner needs attention; check the printer's display, then try again",
+        ),
+        (
             ScanError::JobRejected {
                 status: 409,
                 detail: "Conflict".to_owned(),
@@ -164,6 +168,22 @@ fn a_rejection_body_that_is_not_utf8_is_still_shown() {
     let rejected = ScanError::rejected(400, b"bad \xff byte");
     assert!(
         matches!(&rejected, ScanError::JobRejected { detail, .. } if detail == "bad \u{fffd} byte"),
+        "{rejected:?}"
+    );
+}
+
+#[test]
+fn a_rejection_skips_markup_and_blank_lines() {
+    let html = b"<html>\r\n  <body>\r\n\r\n  Scanner jammed  \r\n</body>\r\n";
+    let rejected = ScanError::rejected(400, html);
+    assert!(
+        matches!(&rejected, ScanError::JobRejected { detail, .. } if detail == "Scanner jammed"),
+        "{rejected:?}"
+    );
+    let xml = b"<?xml version=\"1.0\"?><Error>no</Error>\n";
+    let rejected = ScanError::rejected(409, xml);
+    assert!(
+        matches!(&rejected, ScanError::JobRejected { detail, .. } if detail.is_empty()),
         "{rejected:?}"
     );
 }

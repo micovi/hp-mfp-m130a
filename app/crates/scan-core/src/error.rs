@@ -5,7 +5,9 @@ use crate::http::HttpError;
 use crate::transport::TransportError;
 
 /// Why talking to the scanner failed. Each message is one sentence: what happened, then what to
-/// do about it.
+/// do about it. Messages are lowercase without a final period; callers capitalise the first
+/// letter and add the period. [`ScanError::Cancelled`] answers the user's own request, so it is
+/// not an error to show them.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ScanError {
     /// No printer is attached by USB.
@@ -17,12 +19,16 @@ pub enum ScanError {
     /// The scanner did not become idle in time to take a job.
     #[error("the scanner is busy; try again in a moment")]
     ScannerBusy,
+    /// The scanner reports Stopped or Down: it needs someone to look at the printer.
+    #[error("the scanner needs attention; check the printer's display, then try again")]
+    ScannerNeedsAttention,
     /// The scanner answered the scan request with something other than 201 Created.
     #[error("{}", rejection_message(*status, detail))]
     JobRejected {
         /// The HTTP status code.
         status: u16,
-        /// The first line of the answer's body, shortened; empty for none.
+        /// The first line of the answer's body that is neither blank nor markup, shortened;
+        /// empty for none.
         detail: String,
     },
     /// The printer went silent, or the page did not arrive by its deadline.
@@ -37,7 +43,7 @@ pub enum ScanError {
     /// The printer went away mid-exchange.
     #[error("the printer was disconnected; reconnect its USB cable and try again")]
     Disconnected,
-    /// The caller's cancel flag stopped the scan.
+    /// The caller's cancel flag stopped the scan; not an error to show the user.
     #[error("the scan was cancelled; start a new scan when ready")]
     Cancelled,
     /// The job ended without a page, as it does when started while the scanner warms up.
@@ -83,7 +89,11 @@ impl ScanError {
     /// A [`ScanError::JobRejected`] for a scan request answered with `status` and `body`.
     pub(crate) fn rejected(status: u16, body: &[u8]) -> Self {
         let text = String::from_utf8_lossy(body);
-        let first_line = text.lines().next().unwrap_or_default().trim();
+        let first_line = text
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty() && !line.starts_with('<'))
+            .unwrap_or_default();
         let mut detail: String = first_line.chars().take(DETAIL_MAX).collect();
         if first_line.chars().nth(DETAIL_MAX).is_some() {
             detail.push('…');

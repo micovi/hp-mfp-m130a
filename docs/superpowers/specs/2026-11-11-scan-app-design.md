@@ -59,8 +59,15 @@ GET  {job}/NextDocument       503 (empty body) while the page is being scanned, 
   1/300 in at offset 0,0, clamped to the reported maximum. The captured request
   (`m130a-scanjobs-request.http`, 75 dpi grey) is the golden reference.
 - Waiting for Idle: poll ScannerStatus every second for up to 30 s before giving up as "busy".
-- The 503 polling for one page is bounded by a deadline that grows with the work: 60 s at 150 dpi
-  grey up to 240 s at 600 dpi colour.
+  Testing (or an unknown state) is waited out like Processing; Stopped or Down (PWG: needs
+  attention) fails at once. A POST answered 503 also means busy: status and POST are retried
+  within the same 30 s.
+- If the POST times out, breaks off or breaks HTTP, or a 201 has no usable `Location`, the job
+  may exist anyway: the client reads ScannerStatus once more and deletes (answer ignored) every
+  Pending or Processing job that was not listed before the POST.
+- The 503 polling for one page is bounded by a deadline that grows with the work: 60 s × dpi/150,
+  ×3 for colour, between 60 s and 240 s. That is 60 s up to 150 dpi grey, 120 s at 300 dpi grey,
+  180 s at 150 dpi colour, and 240 s at 600 dpi grey or from 300 dpi colour.
 - After the page, the client does not wait for 404: it sends `DELETE {job}` and ignores the
   answer. This printer answered a few more 503s and then 404, but the closely related M28w keeps
   answering 503 after its single flatbed page (sane-airscan issue #38 trace), and sane-airscan
@@ -89,9 +96,11 @@ Every error reaches the user as one sentence saying what happened and what to do
 | --------- | --------- |
 | Printer not on USB | Status "Printer not connected"; the app re-checks every 2 s |
 | Interface busy (claim fails on 3 and 4) | "The printer's USB interface is in use by another app" |
-| Scanner not Idle | "The scanner is busy; try again in a moment" |
-| Job rejected (not 201) | HTTP status and the first line of the body |
-| 503 for longer than 60 s, or silence over the limit | Timeout error; the job is deleted |
+| Scanner not Idle, or POST answered 503, for 30 s | "The scanner is busy; try again in a moment" |
+| Scanner Stopped or Down | "The scanner needs attention; check the printer's display, then try again", at once |
+| Job rejected (not 201 or 503) | HTTP status and the first line of the body that is not blank or markup |
+| 503 past the page deadline (60–240 s), or silence over the limit | Timeout error; the job is deleted |
+| POST fails partway (timeout, broken answer, no usable `Location`) | Timeout or protocol error; unfinished jobs created by it are deleted |
 | USB unplugged mid-scan | Error; pages already scanned are kept |
 | Closing with unsaved pages | Confirmation dialog |
 | Save fails | The OS error message and the path |
