@@ -591,6 +591,59 @@ fn a_trickling_answer_stops_at_the_overall_limit() {
     assert!(started.elapsed() < total * 5);
 }
 
+/// Answers in pieces with an empty read between them, recording each read's deadline.
+fn answer_recording_deadlines(
+    deadlines: &mut Vec<Instant>,
+) -> Reads<impl FnMut(Instant) -> Result<Vec<u8>, TransportError> + '_> {
+    let mut pieces = ["HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n", "", "ok"]
+        .map(str::as_bytes)
+        .into_iter();
+    Reads(move |deadline| {
+        deadlines.push(deadline);
+        Ok(pieces.next().unwrap_or_default().to_vec())
+    })
+}
+
+#[test]
+fn an_endless_silence_limit_still_waits_at_most_300_s() {
+    let mut deadlines = Vec::new();
+    let started = Instant::now();
+    let response = exchange(
+        &mut answer_recording_deadlines(&mut deadlines),
+        &GET,
+        Duration::MAX,
+    );
+    assert_eq!(response.unwrap().body, b"ok");
+    assert_eq!(deadlines.len(), 3);
+    for deadline in deadlines {
+        let wait = deadline - started;
+        assert!(
+            wait > Duration::from_secs(299) && wait <= Duration::from_secs(301),
+            "{wait:?}"
+        );
+    }
+}
+
+#[test]
+fn endless_limits_do_not_overflow_the_clock() {
+    let mut deadlines = Vec::new();
+    let started = Instant::now();
+    let response = exchange_with_limits(
+        &mut answer_recording_deadlines(&mut deadlines),
+        &GET,
+        Duration::MAX,
+        Duration::MAX,
+    );
+    assert_eq!(response.unwrap().body, b"ok");
+    assert_eq!(deadlines.len(), 3);
+    for deadline in deadlines {
+        assert!(
+            deadline - started >= Duration::from_secs(86_399),
+            "{deadline:?}"
+        );
+    }
+}
+
 #[test]
 fn passes_a_disconnect_through() {
     let mut gone = Reads(|_| Err(TransportError::Disconnected));

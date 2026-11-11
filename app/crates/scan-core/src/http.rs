@@ -112,6 +112,10 @@ pub fn encode_request(request: &Request) -> Vec<u8> {
 /// The longest a response may take from the request, however steadily its bytes arrive.
 const RESPONSE_MAX_DURATION: Duration = Duration::from_secs(300);
 
+/// The furthest ahead a single read's deadline is set, so that no limit, however large, can
+/// overflow the clock; a day is longer than any limit the app uses.
+const LONGEST_READ: Duration = Duration::from_hours(24);
+
 /// Sends `request` and reads one response.
 ///
 /// Bytes left over from an earlier exchange are drained first. Silence is measured by the clock:
@@ -142,25 +146,33 @@ fn exchange_with_limits<T: Transport>(
     transport.drain()?;
     transport.write(&encode_request(request))?;
     let sent = Instant::now();
-    let mut quiet_until = sent + silence;
+    let mut last_data = sent;
     let mut received = false;
     let mut framer = Framer::default();
     loop {
-        let deadline = quiet_until.min(sent + total);
-        if Instant::now() >= deadline {
+        let left = silence
+            .saturating_sub(last_data.elapsed())
+            .min(total.saturating_sub(sent.elapsed()));
+        if left.is_zero() {
             return Err(stopped(received, TransportError::Timeout));
         }
         let data = transport
-            .read(deadline)
+            .read(deadline_in(left))
             .map_err(|error| stopped(received, error))?;
         if !data.is_empty() {
             received = true;
-            quiet_until = Instant::now() + silence;
+            last_data = Instant::now();
         }
         if let Some(response) = framer.feed(&data)? {
             return Ok(response);
         }
     }
+}
+
+/// The deadline `wait` from now, but no further ahead than [`LONGEST_READ`].
+fn deadline_in(wait: Duration) -> Instant {
+    let now = Instant::now();
+    now.checked_add(wait.min(LONGEST_READ)).unwrap_or(now)
 }
 
 /// A transport failure, as an incomplete response once some of it has arrived.
