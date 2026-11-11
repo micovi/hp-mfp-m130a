@@ -7,3 +7,8 @@ probe-output/
 
 # CMake build trees (just fw-test, just fw-build).
 build/
+
+# The scan app's Cargo build tree and the desktop UI's build output and packages.
+app/target/
+app/desktop/ui/dist/
+app/desktop/ui/node_modules/

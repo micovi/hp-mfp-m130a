@@ -1,0 +1,28 @@
+[package]
+name = "scan-desktop"
+version = "0.1.0"
+description = "M130a Scan: the macOS app that scans multi-page documents from the HP M130a"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "m130a-scan-app"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "=2.7.4", features = [] }
+
+[dependencies]
+scan-core = { path = "../../crates/scan-core" }
+serde = { version = "=1.0.229", features = ["derive"] }
+tauri = { version = "=2.12.5", features = [] }
+tauri-plugin-dialog = "=2.8.4"
+thiserror = "=2.0.21"
+
+[dev-dependencies]
+scan-core = { path = "../../crates/scan-core", features = ["testing"] }
+serde_json = "=1.0.154"
+
+[lints]
+workspace = true

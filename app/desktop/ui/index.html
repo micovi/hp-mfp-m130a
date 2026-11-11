@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>M130a Scan</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script type="module" src="main.js"></script>
+  </head>
+  <body>
+    <header class="toolbar">
+      <div class="settings">
+        <fieldset class="segmented" id="mode">
+          <legend class="visually-hidden">Colour mode</legend>
+          <label>
+            <input type="radio" name="mode" value="colour" checked />
+            <span>Colour</span>
+          </label>
+          <label>
+            <input type="radio" name="mode" value="grey" />
+            <span>Grey</span>
+          </label>
+        </fieldset>
+        <label class="popup">
+          <span class="popup-label">Resolution</span>
+          <select id="dpi">
+            <option value="150" selected>150 dpi</option>
+            <option value="300">300 dpi</option>
+            <option value="600">600 dpi</option>
+          </select>
+          <svg class="popup-chevron" viewBox="0 0 9 14" aria-hidden="true">
+            <path d="m1.5 5 3-3 3 3m-6 4 3 3 3-3" />
+          </svg>
+        </label>
+      </div>
+      <div class="actions">
+        <button type="button" class="button" id="save" disabled>Save PDF…</button>
+        <button type="button" class="button primary" id="scan" disabled>Scan page</button>
+      </div>
+    </header>
+
+    <div class="banner" id="error" role="alert" hidden>
+      <svg class="banner-icon" viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M8 1.75 15 14.25H1L8 1.75Z" />
+        <path class="banner-glyph" d="M8 6v4M8 11.9v.1" />
+      </svg>
+      <p class="banner-text" id="error-text"></p>
+      <button type="button" class="icon-button" id="dismiss" aria-label="Dismiss error">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 4.5 7 7m0-7-7 7" /></svg>
+      </button>
+    </div>
+
+    <main class="workspace" id="workspace">
+      <section class="empty" id="empty" aria-labelledby="empty-title">
+        <svg class="empty-art" viewBox="0 0 160 112" aria-hidden="true">
+          <rect class="glass" x="4" y="4" width="152" height="104" rx="7" />
+          <rect class="sheet" x="12" y="12" width="56" height="79" rx="1.5" />
+          <path class="sheet-lines" d="M20 24h28M20 32h40M20 38h36M20 44h40M20 50h24" />
+          <path class="corner" d="M9 27V9h18" />
+        </svg>
+        <h1 class="empty-title" id="empty-title">Place a page on the glass</h1>
+        <p class="empty-text" id="empty-text">
+          Lay it face down against the corner marker, close the lid, then press Scan page.
+        </p>
+      </section>
+      <ol class="pages" id="pages" aria-label="Pages" hidden></ol>
+    </main>
+
+    <footer class="statusbar">
+      <p class="connection" id="connection" data-state="checking">
+        <span class="dot" aria-hidden="true"></span>
+        <span id="connection-text">Looking for the printer…</span>
+      </p>
+      <p class="activity" id="activity" aria-live="polite"></p>
+    </footer>
+
+    <div
+      class="preview"
+      id="preview"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="preview-caption"
+      hidden
+    >
+      <div class="preview-backdrop"></div>
+      <button type="button" class="preview-close" aria-label="Close preview">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 4.5 7 7m0-7-7 7" /></svg>
+      </button>
+      <figure class="preview-figure">
+        <div class="preview-sheet"></div>
+        <figcaption class="preview-caption" id="preview-caption"></figcaption>
+      </figure>
+    </div>
+
+    <template id="page-template">
+      <li class="page" draggable="true">
+        <button type="button" class="page-sheet"></button>
+        <p class="page-caption">
+          <span class="page-number"></span>
+          <span class="page-details"></span>
+        </p>
+        <button type="button" class="page-delete" tabindex="-1">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m5 5 6 6m0-6-6 6" /></svg>
+        </button>
+      </li>
+    </template>
+
+    <template id="scanning-template">
+      <li class="page scanning" aria-label="Scanning a page">
+        <div class="page-sheet placeholder"><span class="lamp"></span></div>
+        <p class="page-caption"><span class="page-number">Scanning…</span></p>
+      </li>
+    </template>
+  </body>
+</html>

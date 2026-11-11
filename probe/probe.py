@@ -7,7 +7,7 @@ scan job. Everything the printer answers is saved under probe-output/ for later 
 import json
 import sys
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -136,7 +136,7 @@ class UsbHttpChannel:
             return read_response(self._read)
 
     @contextmanager
-    def _step(self, what: str) -> Iterator[None]:
+    def _step(self, what: str) -> Generator[None]:
         try:
             yield
         except usb.core.USBError as error:

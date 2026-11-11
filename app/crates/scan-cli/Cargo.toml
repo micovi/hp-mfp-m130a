@@ -1,0 +1,27 @@
+[package]
+name = "scan-cli"
+version = "0.1.0"
+description = "m130a-scan: scan multi-page documents from the HP M130a into one PDF"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "m130a-scan"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "=4.6.7", features = ["derive"] }
+scan-core = { path = "../scan-core" }
+# Ctrl-C: std has no signal handling. Its iterator delivers SIGINT to an ordinary thread, which
+# can then cancel a scan or end the program, with no unsafe code here. It adds three small crates
+# to the libc already in the graph; ctrlc would add six on macOS.
+signal-hook = { version = "=0.4.6", default-features = false, features = ["iterator"] }
+thiserror = "=2.0.21"
+
+[dev-dependencies]
+lopdf = { version = "=0.47.0", default-features = false }
+scan-core = { path = "../scan-core", features = ["testing"] }
+
+[lints]
+workspace = true

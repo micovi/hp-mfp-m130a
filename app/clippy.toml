@@ -1,0 +1,3 @@
+# Tests fail loudly by design: a panic is how a test reports a failure.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

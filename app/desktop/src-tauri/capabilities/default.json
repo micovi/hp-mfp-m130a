@@ -1,0 +1,22 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What the scan window may do: the app's own commands, listening for confirm-close, finding the Documents folder for the default save path, and the save and ask dialogs.",
+  "windows": ["main"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:path:allow-resolve-directory",
+    "core:path:allow-join",
+    "dialog:allow-save",
+    "dialog:allow-ask",
+    "allow-printer-connected",
+    "allow-scan-page",
+    "allow-cancel-scan",
+    "allow-delete-page",
+    "allow-reorder-pages",
+    "allow-save-pdf",
+    "allow-has-unsaved-pages",
+    "allow-quit"
+  ]
+}

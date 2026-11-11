@@ -1,0 +1,7 @@
+HTTP/1.1 201 Created
+Cache-Control: no-cache, no-store, must-revalidate
+Location: /eSCL/ScanJobs/1002
+Server: gSOAP/2.7
+Content-Length: 0
+Connection: keep-alive
+

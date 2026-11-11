@@ -47,6 +47,43 @@ real printer.
 - **Job size (estimate):** hpcups renders 600 dpi 8-bit gray, about 35 MB raw per A4 page; RLE
   makes a text page about 0.3-2 MB, an image page 10-35 MB.
 
+## One eSCL scan over USB
+
+Observed 2026-11-11 from this computer over IF3, by the scan app in `app/` (request and answers
+captured in `app/crates/scan-core/tests/fixtures/`):
+
+```
+GET  /eSCL/ScannerStatus    pwg:State must be Idle
+POST /eSCL/ScanJobs         ScanSettings (text/xml) → 201, Location: /eSCL/ScanJobs/1002
+GET  {job}/NextDocument     503 (empty body) while the page is being scanned
+                            200, image/jpeg, chunked: the whole page at once
+                            503 a few times, then 404
+DELETE {job}                sent by the client after the page
+```
+
+- **Idle first (confirmed):** right after power-on ScannerStatus reports `Processing` for a few
+  seconds. A job posted then is accepted but completes with 0 images, so a client waits for
+  `Idle` before posting.
+- **Location is relative (confirmed):** the 201 carries `Location: /eSCL/ScanJobs/1002`, a path
+  rather than an absolute URL. Clients should accept both.
+- **The page arrives in one piece (confirmed):** `NextDocument` answers 503 with an empty body
+  while the scan head moves, then 200 with the whole JPEG, `Transfer-Encoding: chunked` in
+  2048-byte chunks, only once scanning has finished. Afterwards it answers 503 a few more times,
+  then 404 (the job is finished; the flatbed gives one page per job). A 300 dpi colour A4 page is
+  about 922 kB and arrives after about 10 one-second polls.
+- **DELETE after the page instead of waiting for 404:** this printer does reach 404, but the
+  closely related M28w keeps answering 503 after its single flatbed page (sane-airscan issue #38
+  trace), and sane-airscan likewise stops after the first page and deletes the job. Deleting is
+  harmless here: the job then shows as `Canceled` in ScannerStatus's job list.
+- **An abandoned exchange wedges the interface until drained (confirmed):** if a client stops
+  reading partway through a page (killed mid-transfer), the rest of the response is still queued
+  on the IN endpoint and arrives in bursts, with zero-length packets between them, for a while
+  after. Until all of it has been read, the interface misbehaves: ScannerStatus reports
+  `Processing` and OUT writes time out. The next client must keep reading until the endpoint has
+  sent nothing for a while, not only up to the first empty read; the scan app does that, and
+  falls back to IF4 when IF3 still does not answer, since one interface can be stuck while the
+  other works.
+
 ## The Pico 2 W
 
 - **USB host:** native controller and Pico-PIO-USB are both full-speed only (12 Mbps, about
@@ -94,6 +131,7 @@ real printer.
 - HPLIP models and PPD: https://raw.githubusercontent.com/mwilck/hplip/master/data/models/models.dat,
   https://raw.githubusercontent.com/mwilck/hplip/master/ppd/hpcups/hp-laserjet_mfp_m129-m134.ppd
 - HPLIP scan: https://raw.githubusercontent.com/mwilck/hplip/master/scan/sane/soapht.c
+- sane-airscan M28w trace: https://github.com/alexpevzner/sane-airscan/issues/38
 - ipp-usb: https://github.com/OpenPrinting/ipp-usb (HP class check in `usbcommon.go`, quirks in
   `ipp-usb-quirks/`)
 - TinyUSB: https://github.com/hathach/tinyusb, release 0.21.0, issues #3533, #3874, #4174
