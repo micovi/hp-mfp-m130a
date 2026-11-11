@@ -5,11 +5,15 @@ export interface GridEvents {
   select(id: number): void;
   remove(id: number): void;
   drop(id: number, gap: number): void;
+  open(id: number): void;
 }
 
 export interface GridView {
   render(list: PageList, scanning: boolean): void;
   focusSelected(): void;
+  /** Scrolls the selected card into view at once, so a zoom can start or end on it. */
+  revealSelected(): void;
+  sheetFor(id: number): HTMLElement | null;
   /** Scrolls the last card (the page being scanned, or the one just added) into view. */
   revealLast(): void;
   /** Pages per row, so ↑ and ↓ can step a whole row. */
@@ -126,6 +130,13 @@ function wireClicks(root: HTMLOListElement, events: GridEvents) {
       events.select(id);
     }
   });
+  root.addEventListener("dblclick", (event) => {
+    const id = itemId(event.target);
+    const onDelete = event.target instanceof Element && event.target.closest(".page-delete");
+    if (id !== null && !onDelete) {
+      events.open(id);
+    }
+  });
 }
 
 function wireDrag(root: HTMLOListElement, events: GridEvents) {
@@ -217,6 +228,12 @@ export function createGrid(
     },
     revealLast() {
       root.lastElementChild?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    },
+    revealSelected() {
+      root.querySelector("li.selected")?.scrollIntoView({ block: "nearest" });
+    },
+    sheetFor(id) {
+      return root.querySelector<HTMLElement>(`li[data-id="${id}"] .page-sheet`);
     },
     focusSelected() {
       root.querySelector<HTMLElement>("li.selected .page-sheet")?.focus();

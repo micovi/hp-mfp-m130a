@@ -19,6 +19,8 @@ interface PendingScan {
 
 const A4_INCHES = { width: 8.27, height: 11.69 };
 const SHEET = { width: 620, height: 877 };
+// Drawn at twice the layout size so the large preview can be judged for sharpness.
+const SHEET_SCALE = 2;
 
 function readOptions(params: URLSearchParams): MockOptions {
   return {
@@ -72,13 +74,14 @@ function table(ctx: CanvasRenderingContext2D, top: number, rows: number, color: 
 
 function drawSheet(index: number, color: boolean): string {
   const canvas = document.createElement("canvas");
-  canvas.width = SHEET.width;
-  canvas.height = SHEET.height;
+  canvas.width = SHEET.width * SHEET_SCALE;
+  canvas.height = SHEET.height * SHEET_SCALE;
   const ctx = canvas.getContext("2d");
   if (ctx === null) {
     throw new Error("The mock scanner needs a 2D canvas to draw synthetic pages");
   }
   ctx.fillStyle = "#fbfaf6";
+  ctx.scale(SHEET_SCALE, SHEET_SCALE);
   ctx.fillRect(0, 0, SHEET.width, SHEET.height);
   const titles = ["Tenancy agreement", "Rent statement", "Inspection report", "Notice of works"];
   letterhead(ctx, color, titles[index % titles.length] ?? "Document");

@@ -13,6 +13,8 @@ import {
   selectBy,
   selectPage,
 } from "./pages.ts";
+import { previewAction, previewPage, stepPreview } from "./preview.ts";
+import { createPreview, type PreviewView } from "./preview-view.ts";
 import { defaultPdfName, pageCount, savedNotice } from "./text.ts";
 
 type Connection = "checking" | "connected" | "disconnected";
@@ -72,6 +74,7 @@ const dom = {
   connection: element<HTMLParagraphElement>("connection"),
   connectionText: element<HTMLSpanElement>("connection-text"),
   activity: element<HTMLParagraphElement>("activity"),
+  preview: element<HTMLDivElement>("preview"),
 };
 
 function startBackend(): Backend {
@@ -103,6 +106,16 @@ const grid: GridView = createGrid(dom.pages, backend.pageImageUrl, {
   select: (id) => select(selectPage(state.list, id), false),
   remove: (id) => void deletePage(id),
   drop: (id, gap) => void reorder(dropPageAt(state.list, id, gap)),
+  open: (id) => {
+    select(selectPage(state.list, id), false);
+    openPreview();
+  },
+});
+
+const preview: PreviewView = createPreview(dom.preview, {
+  imageUrl: backend.pageImageUrl,
+  cardSheet: (id) => grid.sheetFor(id),
+  requestClose: () => closePreview(),
 });
 
 // Tauri may run commands concurrently; page edits must reach the store in the order made.
@@ -167,6 +180,47 @@ function render() {
   renderStatus();
   renderEmpty();
   grid.render(state.list, state.scanning);
+  renderPreview();
+}
+
+function renderPreview() {
+  if (!preview.isOpen()) {
+    return;
+  }
+  if (previewPage(state.list) === null) {
+    closePreview();
+  } else {
+    preview.show(state.list);
+  }
+}
+
+/** Opens the selected page large; false when no page is selected. */
+function openPreview(): boolean {
+  if (previewPage(state.list) === null) {
+    return false;
+  }
+  grid.revealSelected();
+  preview.open(state.list);
+  return true;
+}
+
+function closePreview() {
+  grid.revealSelected();
+  void preview.close(state.list).then(() => grid.focusSelected());
+}
+
+/** Only navigation and closing work in the preview; every other key is swallowed. */
+function handlePreviewKey(event: KeyboardEvent) {
+  event.preventDefault();
+  const action = previewAction(event);
+  if (action === "close") {
+    closePreview();
+  } else if (action === "trap-focus") {
+    preview.focus();
+  } else if (action !== "ignore") {
+    state.list = stepPreview(state.list, action === "next" ? 1 : -1);
+    render();
+  }
 }
 
 function selectedColor(): boolean {
@@ -186,7 +240,12 @@ async function scan() {
   grid.revealLast();
   try {
     const page = await backend.scanPage(selectedColor(), selectedDpi());
+    const viewing = state.list.selectedId;
     state.list = addPage(state.list, page);
+    // A page arriving while one is open large must not replace it.
+    if (preview.isOpen()) {
+      state.list = selectPage(state.list, viewing);
+    }
     state.dirty = true;
     state.error = null;
   } catch (error) {
@@ -377,7 +436,15 @@ function handleWindowKey(event: KeyboardEvent): boolean {
   return false;
 }
 
+function isOpenKey(event: KeyboardEvent): boolean {
+  return event.key === " " && !event.metaKey && !event.ctrlKey && !event.altKey;
+}
+
 function onKeyDown(event: KeyboardEvent) {
+  if (preview.isOpen()) {
+    handlePreviewKey(event);
+    return;
+  }
   if (handleWindowKey(event)) {
     event.preventDefault();
     return;
@@ -385,7 +452,7 @@ function onKeyDown(event: KeyboardEvent) {
   if (isFormControl(event.target) || !pageKeysActive(event.target)) {
     return;
   }
-  if (handlePageKey(event)) {
+  if ((isOpenKey(event) && openPreview()) || handlePageKey(event)) {
     event.preventDefault();
   }
 }

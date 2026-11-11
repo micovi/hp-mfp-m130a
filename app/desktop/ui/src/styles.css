@@ -43,6 +43,9 @@
   --danger-surface: oklch(0.965 0.022 27);
   --danger-edge: oklch(0.87 0.055 27);
   --danger-text: oklch(0.41 0.14 27);
+  --scrim: oklch(0.32 0.012 255 / 0.42);
+  --hud: oklch(0.22 0.006 255 / 0.78);
+  --on-hud: oklch(0.97 0.002 255);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -70,6 +73,8 @@
     --danger-surface: oklch(0.3 0.05 27);
     --danger-edge: oklch(0.4 0.08 27);
     --danger-text: oklch(0.88 0.06 27);
+    --scrim: oklch(0.08 0.004 255 / 0.6);
+    --hud: oklch(0.3 0.006 255 / 0.82);
   }
 }
 
@@ -678,6 +683,104 @@ h1 {
 
 .activity.busy {
   color: var(--text);
+}
+
+/* Preview: one page large over the dimmed window, like Quick Look. */
+
+.preview {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+}
+
+.preview-backdrop {
+  position: absolute;
+  inset: 0;
+  background: var(--scrim);
+  backdrop-filter: blur(16px) saturate(1.1);
+  -webkit-backdrop-filter: blur(16px) saturate(1.1);
+}
+
+.preview-figure {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  margin: 0;
+  pointer-events: none;
+}
+
+.preview-sheet {
+  position: relative;
+  width: min(100vw - 96px, (100vh - 128px) / var(--ratio, 1.414));
+  aspect-ratio: var(--aspect, 210 / 297);
+  border-radius: 2px;
+  background: var(--paper);
+  box-shadow:
+    0 0 0 1px var(--sheet-edge),
+    0 2px 6px oklch(0 0 0 / 0.18),
+    0 28px 64px -16px oklch(0 0 0 / 0.5);
+  overflow: hidden;
+  transform-origin: 0 0;
+  pointer-events: auto;
+}
+
+.preview-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+/* The page sits on paper even in dark mode, so its message keeps a fixed dark ink. */
+.preview-sheet[data-failed]::after {
+  content: "This page's image could not be shown.";
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--space-5);
+  color: oklch(0.42 0.01 255);
+  text-align: center;
+}
+
+.preview-caption {
+  padding: 3px var(--space-3);
+  border-radius: 7px;
+  background: var(--hud);
+  color: var(--on-hud);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: auto;
+}
+
+.preview-close {
+  position: absolute;
+  top: var(--space-4);
+  left: var(--space-4);
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--hud);
+  color: var(--on-hud);
+}
+
+.preview-close svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
 }
 
 @media (prefers-reduced-motion: reduce) {
