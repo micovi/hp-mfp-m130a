@@ -10,6 +10,7 @@ pub mod scanner;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 pub mod transport;
+pub mod usb;
 
 pub use error::ScanError;
 pub use escl::{
@@ -19,3 +20,4 @@ pub use escl::{
 pub use jpeg::{JpegError, JpegInfo, jpeg_info};
 pub use pdf::{Page, PageError, PdfError, write_pdf};
 pub use scanner::{Scanner, Timing};
+pub use usb::{UsbTransport, printer_connected};

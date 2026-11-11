@@ -12,6 +12,7 @@ testing = []
 
 [dependencies]
 httparse = "=1.10.1"
+nusb = "=0.2.9"
 pdf-writer = "=0.15.0"
 quick-xml = "=0.42.0"
 thiserror = "=2.0.21"
