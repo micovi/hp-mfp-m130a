@@ -75,3 +75,29 @@ app-hw-test:
 app-build: app-ui
     cd app/desktop/src-tauri && cargo tauri build --bundles app
     @echo "${CARGO_TARGET_DIR:-app/target}/release/bundle/macos/M130a Scan.app"
+
+# Install the app in /Applications and the CLI in ~/.local/bin, for use outside this repo. Nix's
+# toolchain links libiconv from /nix/store, which garbage collection can delete, so both binaries
+# are pointed at macOS's own copy (the same Apple sources) and signed again.
+app-install: app-build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    target="${CARGO_TARGET_DIR:-app/target}/release"
+    cargo build --manifest-path app/Cargo.toml --release -p scan-cli
+    osascript -e 'tell application "M130a Scan" to quit' 2>/dev/null || true
+    ditto "$target/bundle/macos/M130a Scan.app" "/Applications/M130a Scan.app"
+    install -m 755 "$target/m130a-scan" "$HOME/.local/bin/m130a-scan"
+    for binary in "/Applications/M130a Scan.app/Contents/MacOS/m130a-scan-app" \
+        "$HOME/.local/bin/m130a-scan"; do
+        otool -L "$binary" | awk '/\/nix\/store\/.*libiconv/ {print $1}' | while read -r lib; do
+            install_name_tool -change "$lib" /usr/lib/libiconv.2.dylib "$binary" 2>/dev/null
+        done
+        if otool -L "$binary" | grep -q /nix/store; then
+            echo "$binary still links /nix/store:" >&2
+            otool -L "$binary" | grep /nix/store >&2
+            exit 1
+        fi
+    done
+    codesign --force --sign - "$HOME/.local/bin/m130a-scan"
+    codesign --force --deep --sign - "/Applications/M130a Scan.app"
+    echo "Installed /Applications/M130a Scan.app and $HOME/.local/bin/m130a-scan"
