@@ -40,22 +40,33 @@ Dependencies, each for one job: `nusb` (USB, pure Rust), `httparse` (response he
 
 ## One scan
 
+Observed on the printer (2026-11-11, 75 dpi grey, fixtures in `app/crates/scan-core/tests/fixtures/`):
+
 ```
-GET  /eSCL/ScannerStatus           pwg:State must be Idle, else "scanner busy"
-POST /eSCL/ScanJobs                ScanSettings (text/xml) → 201, Location: job URL
-GET  {job}/NextDocument            200 → the page's JPEG (may take tens of seconds, may be chunked)
-                                   503 → busy, retry every second
-GET  {job}/NextDocument            404 → job finished (flatbed: one page per job)
+GET  /eSCL/ScannerStatus      pwg:State must be Idle. Right after power-on it reports Processing
+                              for a few seconds; a job started then completes with 0 images.
+POST /eSCL/ScanJobs           ScanSettings (text/xml) → 201, Location: /eSCL/ScanJobs/1002
+GET  {job}/NextDocument       503 (empty body) while the page is being scanned, polled every second
+                              200, image/jpeg, Transfer-Encoding: chunked (2048-byte chunks):
+                              the whole page, delivered at once when scanning has finished
+                              503 again a few times, then
+                              404 → the job is finished (flatbed: one page per job)
 ```
 
-- The job path is taken from `Location`, absolute (`http://localhost/eSCL/ScanJobs/…`) or relative.
-- ScanSettings: Platen, `RGB24` (colour) or `Grayscale8` (grey), 150/300/600 dpi (default 300),
-  JPEG, region A4 = 2480×3508 in 1/300 in clamped to the reported maximum.
-- Silence is measured by the clock, not by read results: the idle printer answers bulk reads with
-  zero-length packets continuously. Limits: 10 s for ordinary requests, 60 s while a page is being
-  scanned. Zero-length packets never extend a deadline.
+- The job path is taken from `Location`, relative (as observed) or absolute.
+- ScanSettings: Version 2.0, Intent Document, Platen, `RGB24` (colour) or `Grayscale8` (grey),
+  150/300/600 dpi (default 300), `pwg:DocumentFormat` image/jpeg, region A4 = 2480×3508 in
+  1/300 in at offset 0,0, clamped to the reported maximum. The captured request
+  (`m130a-scanjobs-request.http`, 75 dpi grey) is the golden reference.
+- Waiting for Idle: poll ScannerStatus every second for up to 30 s before giving up as "busy".
+- The 503 polling for one page is bounded by a deadline that grows with the work: 60 s at 150 dpi
+  grey up to 240 s at 600 dpi colour. After the page, keep polling (503 → retry) until 404, for at
+  most 30 s.
+- Each exchange measures silence by the clock, not by read results: the idle printer answers bulk
+  reads with zero-length packets continuously. A response must arrive within 10 s of the request;
+  zero-length packets never extend that.
 - Before each request the transport drains leftover bytes up to the first empty read.
-- Cancel sends `DELETE {job}` and finishes the exchange.
+- Cancel sends `DELETE {job}` and stops polling.
 
 ## Pages and PDF
 
