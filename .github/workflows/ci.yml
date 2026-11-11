@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   checks:
-    name: Probe and firmware checks
+    name: Probe, firmware and scan app checks
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -44,3 +44,11 @@ jobs:
 
       - name: Firmware build
         run: nix develop --command just fw-build
+
+      # The desktop crate cannot build on Linux without WebKitGTK, so this job checks only
+      # scan-core and scan-cli.
+      - name: Scan app tests
+        run: nix develop --command just app_packages='-p scan-core -p scan-cli' app-test
+
+      - name: Scan app format, clippy and limits
+        run: nix develop --command just app_packages='-p scan-core -p scan-cli' app-lint

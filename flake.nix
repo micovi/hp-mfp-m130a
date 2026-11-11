@@ -52,6 +52,15 @@
               # Flash through the Debug Probe (just flash) and read the Pico's UART (just logs).
               pkgs.probe-rs-tools
               pkgs.tio
+              # The scan app (just app-test, just app-lint): Rust workspace, Tauri CLI, and the
+              # UI's TypeScript build and lint.
+              pkgs.rustc
+              pkgs.cargo
+              pkgs.clippy
+              pkgs.rustfmt
+              pkgs.cargo-tauri
+              pkgs.bun
+              pkgs.biome
             ];
 
             PICO_SDK_PATH = "${picoSdk}/lib/pico-sdk";

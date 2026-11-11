@@ -1,0 +1,10 @@
+[package]
+name = "scan-core"
+version = "0.1.0"
+description = "Scans pages from the HP LaserJet Pro MFP M130a over USB (eSCL) into a PDF"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
