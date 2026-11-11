@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 use std::fmt;
+use std::sync::Arc;
 
 use scan_core::Page;
 use serde::{Deserialize, Serialize};
@@ -59,7 +60,7 @@ pub enum StoreError {
 /// The pages in document order, and whether they changed since the last save.
 #[derive(Debug, Default)]
 pub struct PageStore {
-    pages: Vec<(PageId, Page)>,
+    pages: Vec<(PageId, Arc<Page>)>,
     next_id: u64,
     revision: u64,
     saved_revision: u64,
@@ -77,7 +78,7 @@ impl PageStore {
         let id = PageId(self.next_id);
         self.next_id += 1;
         let meta = meta(id, &page);
-        self.pages.push((id, page));
+        self.pages.push((id, Arc::new(page)));
         self.changed();
         meta
     }
@@ -125,19 +126,22 @@ impl PageStore {
         Ok(())
     }
 
-    /// The pages in document order.
+    /// The pages in document order, shared so they can be written without holding the store.
     #[must_use]
-    pub fn in_order(&self) -> Vec<&Page> {
-        self.pages.iter().map(|(_, page)| page).collect()
+    pub fn in_order(&self) -> Vec<Arc<Page>> {
+        self.pages
+            .iter()
+            .map(|(_, page)| Arc::clone(page))
+            .collect()
     }
 
     /// The page with this id.
     #[must_use]
-    pub fn get(&self, id: PageId) -> Option<&Page> {
+    pub fn get(&self, id: PageId) -> Option<Arc<Page>> {
         self.pages
             .iter()
             .find(|(page_id, _)| *page_id == id)
-            .map(|(_, page)| page)
+            .map(|(_, page)| Arc::clone(page))
     }
 
     /// How many pages the document has.
@@ -166,9 +170,10 @@ impl PageStore {
     }
 
     /// Records that the pages as they were at `revision` are saved. Changes made after that
-    /// revision keep the document dirty.
+    /// revision keep the document dirty, and a save that finishes after a later one does not
+    /// undo it.
     pub fn mark_saved(&mut self, revision: u64) {
-        self.saved_revision = revision;
+        self.saved_revision = self.saved_revision.max(revision);
     }
 
     fn changed(&mut self) {

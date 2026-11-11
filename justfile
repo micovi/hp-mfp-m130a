@@ -48,14 +48,18 @@ logs:
 # WebKitGTK: just app_packages='-p scan-core -p scan-cli' app-test
 app_packages := "--workspace"
 
+# The desktop UI's packages and its build in app/desktop/ui/dist, which the desktop crate embeds.
+app-ui:
+    cd app/desktop/ui && bun install --frozen-lockfile && bun run build
+
 # Scan app unit tests (Rust and UI); no printer needed.
-app-test:
+app-test: app-ui
     cargo test --manifest-path app/Cargo.toml {{app_packages}}
-    cd app/desktop/ui && bun install --frozen-lockfile && bun run test
+    cd app/desktop/ui && bun run test
 
 # Scan app limits: rustfmt, clippy, Biome and tsc, function size and complexity (lizard),
 # 100-char lines (grep).
-app-lint:
+app-lint: app-ui
     cargo fmt --manifest-path app/Cargo.toml --all --check
     cargo clippy --manifest-path app/Cargo.toml {{app_packages}} --all-targets -- -D warnings
     cd app/desktop/ui && bun run lint
@@ -67,7 +71,7 @@ app-lint:
 app-hw-test:
     cargo test --manifest-path app/Cargo.toml -p scan-core -- --ignored --test-threads=1
 
-# Build the macOS app bundle (the UI first) and print where it landed.
-app-build:
+# Build the macOS app bundle and print where it landed.
+app-build: app-ui
     cd app/desktop/src-tauri && cargo tauri build --bundles app
-    @echo "app/target/release/bundle/macos/M130a Scan.app"
+    @echo "${CARGO_TARGET_DIR:-app/target}/release/bundle/macos/M130a Scan.app"

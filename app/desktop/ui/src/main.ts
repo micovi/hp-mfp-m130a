@@ -8,6 +8,7 @@ import {
   type PageList,
   pageIds,
   removePage,
+  restoreOrder,
   sameOrder,
   selectBy,
   selectPage,
@@ -224,7 +225,13 @@ async function deletePage(id: number) {
   render();
 }
 
-/** Shows the new order at once and rolls it back if the desktop process refuses it. */
+// Counts reorders, so a refused one is rolled back only when no later reorder replaced it.
+let reorders = 0;
+
+/**
+ * Shows the new order at once and rolls it back if the desktop process refuses it. Pages scanned
+ * meanwhile stay at the end, where the desktop process put them.
+ */
 async function reorder(next: PageList) {
   const previous = state.list;
   state.list = next;
@@ -232,14 +239,16 @@ async function reorder(next: PageList) {
     render();
     return;
   }
+  reorders += 1;
+  const issued = reorders;
   state.dirty = true;
   state.notice = "";
   render();
   try {
     await queueEdit(() => backend.reorderPages(pageIds(next)));
   } catch (error) {
-    if (state.list === next) {
-      state.list = previous;
+    if (issued === reorders) {
+      state.list = restoreOrder(state.list, previous);
     }
     showError(error);
     render();

@@ -86,8 +86,8 @@ fn page_meta_serialises_with_the_field_names_the_ui_reads() {
 #[test]
 fn get_finds_pages_by_id() {
     let (store, ids) = three_pages();
-    assert_eq!(store.get(ids[1]).map(Page::dpi), Some(150));
-    assert_eq!(store.get(PageId(99)), None);
+    assert_eq!(store.get(ids[1]).map(|page| page.dpi()), Some(150));
+    assert!(store.get(PageId(99)).is_none());
 }
 
 #[test]
@@ -95,7 +95,7 @@ fn delete_removes_only_that_page_and_ids_are_not_reused() {
     let (mut store, ids) = three_pages();
     store.delete(ids[1]).unwrap();
     assert_eq!(dpis(&store), [75, 300]);
-    assert_eq!(store.get(ids[1]), None);
+    assert!(store.get(ids[1]).is_none());
     assert_eq!(store.add(colour()).id, PageId(3));
 }
 
@@ -117,7 +117,7 @@ fn reorder_puts_pages_in_the_given_order() {
     let (mut store, ids) = three_pages();
     store.reorder(&[ids[1], ids[2], ids[0]]).unwrap();
     assert_eq!(dpis(&store), [150, 300, 75]);
-    assert_eq!(store.get(ids[2]).map(Page::dpi), Some(300));
+    assert_eq!(store.get(ids[2]).map(|page| page.dpi()), Some(300));
 }
 
 #[test]
@@ -180,6 +180,16 @@ fn a_change_made_while_saving_keeps_the_document_dirty() {
     store.add(colour());
     store.mark_saved(saving);
     assert!(store.is_dirty());
+}
+
+#[test]
+fn a_save_that_finishes_after_a_later_one_keeps_the_later_revision() {
+    let (mut store, _) = three_pages();
+    let first = store.revision();
+    store.add(colour());
+    store.mark_saved(store.revision());
+    store.mark_saved(first);
+    assert!(!store.is_dirty());
 }
 
 #[test]

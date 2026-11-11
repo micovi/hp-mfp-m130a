@@ -45,8 +45,8 @@ jobs:
       - name: Firmware build
         run: nix develop --command just fw-build
 
-      # The desktop crate cannot build on Linux without WebKitGTK, so this job checks only
-      # scan-core and scan-cli.
+      # The desktop crate cannot build on Linux without WebKitGTK, so this job's Rust checks
+      # cover only scan-core and scan-cli; the UI's tests and lints run in full.
       - name: Scan app tests
         run: nix develop --command just app_packages='-p scan-core -p scan-cli' app-test
 

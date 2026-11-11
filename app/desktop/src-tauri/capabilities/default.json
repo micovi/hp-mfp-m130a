@@ -1,10 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "What the scan window may do: the app's own commands, Tauri's core defaults (events and paths) and the save and ask dialogs.",
+  "description": "What the scan window may do: the app's own commands, listening for confirm-close, finding the Documents folder for the default save path, and the save and ask dialogs.",
   "windows": ["main"],
   "permissions": [
-    "core:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:path:allow-resolve-directory",
+    "core:path:allow-join",
     "dialog:allow-save",
     "dialog:allow-ask",
     "allow-printer-connected",

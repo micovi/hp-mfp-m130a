@@ -90,6 +90,18 @@ export function dropPageAt(list: PageList, id: number, gap: number): PageList {
   return movePageTo(list, id, gap > from ? gap - 1 : gap);
 }
 
+/**
+ * Undoes a reorder the desktop process refused: the pages of `previous` that are still listed,
+ * in its order, then the pages added since (scans only append), keeping the current selection.
+ */
+export function restoreOrder(current: PageList, previous: PageList): PageList {
+  const listed = new Map(current.pages.map((page) => [page.id, page]));
+  const before = new Set(pageIds(previous));
+  const kept = previous.pages.flatMap((page) => listed.get(page.id) ?? []);
+  const added = current.pages.filter((page) => !before.has(page.id));
+  return { pages: [...kept, ...added], selectedId: current.selectedId };
+}
+
 export function selectPage(list: PageList, id: number | null): PageList {
   if (id !== null && indexOf(list, id) === -1) {
     return list;

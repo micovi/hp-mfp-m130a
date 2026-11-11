@@ -9,6 +9,7 @@ import {
   type PageMeta,
   pageIds,
   removePage,
+  restoreOrder,
   sameOrder,
   selectBy,
   selectedIndex,
@@ -169,5 +170,34 @@ describe("sameOrder", () => {
     expect(sameOrder(list, selectPage(list, 2))).toBe(true);
     expect(sameOrder(list, movePageBy(list, 1, 1))).toBe(false);
     expect(sameOrder(list, removePage(list, 2))).toBe(false);
+  });
+});
+
+describe("restoreOrder", () => {
+  it("puts the pages back in their earlier order", () => {
+    const restored = restoreOrder(listOf([3, 1, 2], 3), listOf([1, 2, 3], 1));
+    expect(pageIds(restored)).toEqual([1, 2, 3]);
+    expect(restored.selectedId).toBe(3);
+  });
+
+  it("keeps pages scanned since at the end, in the order they arrived", () => {
+    const restored = restoreOrder(listOf([2, 1, 4, 5], 5), listOf([1, 2]));
+    expect(pageIds(restored)).toEqual([1, 2, 4, 5]);
+    expect(restored.selectedId).toBe(5);
+  });
+
+  it("leaves out pages deleted since", () => {
+    expect(pageIds(restoreOrder(listOf([3, 1]), listOf([1, 2, 3])))).toEqual([1, 3]);
+  });
+
+  it("keeps the current page objects", () => {
+    const current = listOf([2, 1]);
+    const restored = restoreOrder(current, listOf([1, 2]));
+    expect(restored.pages[0]).toBe(current.pages[1]);
+  });
+
+  it("handles empty lists", () => {
+    expect(restoreOrder(emptyList, emptyList)).toEqual(emptyList);
+    expect(pageIds(restoreOrder(listOf([7]), emptyList))).toEqual([7]);
   });
 });
